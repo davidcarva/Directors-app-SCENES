@@ -1,0 +1,12 @@
+# Dependências e artefatos de build (gerados fora do repo)
+node_modules/
+/android/
+/diretor-build/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
