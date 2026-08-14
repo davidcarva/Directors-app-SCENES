@@ -653,6 +653,104 @@ function toast(msg, opts) {
   toastTimer = setTimeout(() => t.classList.remove("show"), o.ms);
 }
 
+/* ---------------- Novo roteiro com IA ----------------
+   Chama a função serverless /api/gerar-roteiro (chave OpenAI fica lá)
+   e cria um roteiro já estruturado em cenas.
+   ------------------------------------------------------ */
+function abrirRoteiroIA() {
+  const ov = mkOverlay(`
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-body">
+        <h2 class="modal-title"><i class="ti ti-sparkles"></i> Novo roteiro com IA</h2>
+        <p class="modal-msg" style="margin-bottom:14px">Descreva a ideia — a IA divide em cenas short-form já com função e técnica sugerida.</p>
+        <span class="label">Sobre o que é o vídeo?</span>
+        <textarea id="ia-tema" rows="3" placeholder="Ex: 3 erros que iniciantes cometem ao editar vídeo"></textarea>
+        <div class="ia-row">
+          <div class="ia-n"><span class="label">Nº de cenas</span>
+            <input id="ia-ncenas" type="number" min="3" max="10" value="6" inputmode="numeric"></div>
+          <div style="flex:1"><span class="label">Estilo (opcional)</span>
+            <input id="ia-estilo" type="text" placeholder="Ex: informal, gancho forte"></div>
+        </div>
+        <p class="ia-msg" id="ia-msg"></p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" data-ia="cancel">Cancelar</button>
+        <button class="btn btn-primary" data-ia="go"><i class="ti ti-sparkles"></i> Gerar</button>
+      </div>
+    </div>`, "modal-overlay");
+
+  const temaEl = ov.querySelector("#ia-tema");
+  const msgEl = ov.querySelector("#ia-msg");
+  const goBtn = ov.querySelector('[data-ia="go"]');
+  let done = false, loading = false;
+  const close = () => { if (loading || done) return; done = true; closeOverlay(ov); };
+
+  ov.addEventListener("click", (e) => {
+    if (e.target === ov) return close();
+    const b = e.target.closest("[data-ia]");
+    if (!b) return;
+    if (b.getAttribute("data-ia") === "cancel") return close();
+    if (b.getAttribute("data-ia") === "go") gerar();
+  });
+
+  async function gerar() {
+    const tema = temaEl.value.trim();
+    if (!tema) { msgEl.className = "ia-msg err"; msgEl.textContent = "Escreve a ideia do vídeo primeiro."; temaEl.focus(); return; }
+    const nCenas = Math.max(3, Math.min(10, parseInt(ov.querySelector("#ia-ncenas").value, 10) || 6));
+    const estilo = ov.querySelector("#ia-estilo").value.trim();
+    loading = true;
+    goBtn.disabled = true;
+    goBtn.innerHTML = `<i class="ti ti-loader-2 spin"></i> Gerando…`;
+    msgEl.className = "ia-msg info";
+    msgEl.textContent = "A IA está montando suas cenas…";
+    try {
+      const resp = await fetch("/api/gerar-roteiro", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tema, nCenas, estilo,
+          funcoes: (window.FUNCOES || []).map((f) => ({ id: f.id, nome: f.nome })),
+          tecnicas: (window.TECNICAS || []).map((t) => ({ id: t.id, nome: t.nome }))
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.erro || ("Erro " + resp.status));
+      const cenasIA = Array.isArray(data.cenas) ? data.cenas : [];
+      if (!cenasIA.length) throw new Error("A IA não retornou cenas.");
+      const cenas = cenasIA.map((c) => ({
+        id: uid("cen"),
+        descricao: String(c.descricao || "").trim(),
+        tecnicaId: tecnica(c.tecnicaId) ? c.tecnicaId : null,
+        funcao: (window.FUNCOES || []).some((f) => f.id === c.funcao) ? c.funcao : null,
+        emocao: null, imagemId: null, comp: null, luz: null,
+        dica: "", local: "", horario: "", equipamento: "", gravada: false
+      }));
+      const novo = {
+        id: uid("rot"),
+        nome: String(data.nome || tema).slice(0, 80),
+        mensagem: String(data.mensagem || "").trim(),
+        criadoEm: Date.now(), atualizadoEm: Date.now(),
+        cenas
+      };
+      const all = store.getRoteiros();
+      all.push(novo);
+      store.saveRoteiros(all);
+      done = true; closeOverlay(ov);
+      toast("Roteiro gerado com IA", { icon: "ti-sparkles" });
+      go("#/roteiro/" + novo.id);
+    } catch (e) {
+      loading = false;
+      goBtn.disabled = false;
+      goBtn.innerHTML = `<i class="ti ti-sparkles"></i> Gerar`;
+      const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+      msgEl.className = "ia-msg err";
+      msgEl.textContent = String((e && e.message) || e) + (local ? " — a IA só roda no site publicado (Vercel), não no localhost." : "");
+    }
+  }
+
+  setTimeout(() => temaEl.focus(), 60);
+}
+
 /* ---------------- Telas ---------------- */
 function viewHome() {
   const roteiros = store.getRoteiros().sort((a, b) => b.atualizadoEm - a.atualizadoEm);
@@ -672,7 +770,8 @@ function viewHome() {
         </div>`;
       }).join("")}</div>
       <div class="spacer"></div>
-      <button class="btn btn-primary" data-act="novo-roteiro"><i class="ti ti-plus"></i> Novo roteiro</button>`
+      <button class="btn btn-primary" data-act="novo-roteiro-ia"><i class="ti ti-sparkles"></i> Novo roteiro com IA</button>
+      <button class="btn btn-outline mt-2" data-act="novo-roteiro"><i class="ti ti-plus"></i> Novo roteiro em branco</button>`
     : `<div class="onboarding">
          <div class="ob-icon"><i class="ti ti-clapperboard"></i></div>
          <h2>Planeje seus vídeos, cena por cena</h2>
@@ -682,7 +781,8 @@ function viewHome() {
            <div class="ob-step"><span class="ob-n">2</span> Monte as cenas com uma referência visual</div>
            <div class="ob-step"><span class="ob-n">3</span> Marque como gravada conforme filma</div>
          </div>
-         <button class="btn btn-primary" data-act="novo-roteiro"><i class="ti ti-plus"></i> Criar primeiro roteiro</button>
+         <button class="btn btn-primary" data-act="novo-roteiro-ia"><i class="ti ti-sparkles"></i> Criar roteiro com IA</button>
+         <button class="btn btn-outline" data-act="novo-roteiro"><i class="ti ti-plus"></i> Criar em branco</button>
          <button class="btn btn-ghost" data-act="go-acervo"><i class="ti ti-books"></i> Explorar técnicas</button>
        </div>`;
 
@@ -1560,6 +1660,8 @@ document.addEventListener("click", async (e) => {
   if (act === "ver-tecnica") return go("#/tecnica/" + d.tid);
   if (act === "abrir-guia") return go("#/guia");
   if (act === "abrir-config") return go("#/config");
+
+  if (act === "novo-roteiro-ia") return abrirRoteiroIA();
 
   // Nuvem (login Google)
   if (act === "cloud-signin") { if (window.Cloud) window.Cloud.signIn(); return; }

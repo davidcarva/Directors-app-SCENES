@@ -264,7 +264,7 @@ img { display: block; }
 .empty-state p { margin: 14px 0 0; }
 
 /* ---------- Forms ---------- */
-textarea, input[type="text"], input[type="search"] {
+textarea, input[type="text"], input[type="search"], input[type="number"] {
   width: 100%;
   background: var(--surface);
   border: 1px solid var(--border-strong);
@@ -277,7 +277,7 @@ textarea, input[type="text"], input[type="search"] {
 }
 input[type="search"] { -webkit-appearance: none; appearance: none; }
 textarea::placeholder, input::placeholder { color: var(--text-3); }
-textarea:focus, input[type="text"]:focus, input[type="search"]:focus {
+textarea:focus, input[type="text"]:focus, input[type="search"]:focus, input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
@@ -1039,6 +1039,15 @@ input[type="range"]::-moz-range-thumb {
 .modal-actions .btn { flex: 1; padding: 12px; }
 .btn-danger-solid { background: var(--danger); color: #fff; font-weight: 600; }
 .btn-danger-solid:active { filter: brightness(0.92); }
+
+/* Modal "Novo roteiro com IA" */
+.ia-row { display: flex; gap: 12px; margin-top: 12px; }
+.ia-n { width: 96px; flex-shrink: 0; }
+.ia-msg { font-size: 13px; margin: 12px 0 0; line-height: 1.45; min-height: 1px; }
+.ia-msg.err { color: var(--danger); }
+.ia-msg.info { color: var(--text-2); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { display: inline-block; animation: spin 0.8s linear infinite; }
 
 /* Action sheet (menu do roteiro) — reaproveita .sheet */
 .action-sheet .sheet-body { padding: 8px 10px calc(14px + env(safe-area-inset-bottom, 0px)); }
