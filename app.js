@@ -704,7 +704,8 @@ function abrirRoteiroIA() {
     msgEl.className = "ia-msg info";
     msgEl.textContent = "A IA está montando suas cenas…";
     try {
-      const resp = await fetch("/api/gerar-roteiro", {
+      // Caminho COM .js: o builds da Vercel monta a função no path do arquivo.
+      const resp = await fetch("/api/gerar-roteiro.js", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
