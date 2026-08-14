@@ -63,7 +63,10 @@ const store = {
     try { return JSON.parse(localStorage.getItem("roteiros") || "[]"); }
     catch { return []; }
   },
-  saveRoteiros(r) { localStorage.setItem("roteiros", JSON.stringify(r)); },
+  saveRoteiros(r) {
+    localStorage.setItem("roteiros", JSON.stringify(r));
+    if (window.Cloud && window.Cloud.notifyLocalChange) window.Cloud.notifyLocalChange(r);
+  },
   getTecImgs() {
     try { return JSON.parse(localStorage.getItem("tecImgs") || "{}"); }
     catch { return {}; }
@@ -155,23 +158,31 @@ function updateRoteiro(id, patch) {
 function emocao(id) { return (window.EMOCOES || []).find((e) => e.id === id); }
 function funcao(id) { return (window.FUNCOES || []).find((f) => f.id === id); }
 
-// Curva de energia das cenas (sparkline) baseada na função de cada cena.
+// Gráfico de energia das cenas (área) baseado na função de cada cena.
+// Usa vector-effect=non-scaling-stroke pra o traço não distorcer quando
+// o SVG estica na largura (evita o efeito "esticado").
 function curvaRitmo(cenas) {
   if (!cenas.length) return "";
-  const w = 320, h = 64, pad = 10;
+  const w = 320, h = 100, padY = 16;
+  const xs = (i) => (cenas.length === 1 ? w / 2 : (i * w) / (cenas.length - 1));
   const pts = cenas.map((c, i) => {
     const f = funcao(c.funcao);
     const e = f ? f.energia : 3;
-    const x = cenas.length === 1 ? w / 2 : pad + (i * (w - 2 * pad)) / (cenas.length - 1);
-    const y = h - pad - ((e - 1) / 4) * (h - 2 * pad);
-    return [x, y];
+    const y = h - padY - ((e - 1) / 4) * (h - 2 * padY);
+    return [xs(i), y];
   });
-  const path = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
-  const dots = pts.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="#e0c060"/>`).join("");
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:64px;display:block">
-      <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#333" stroke-width="1"/>
-      <path d="${path}" fill="none" stroke="#e0c060" stroke-width="2" stroke-linejoin="round"/>${dots}
-    </svg>`;
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  const area = `M0 ${h} ` + pts.map((p) => `L${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ") + ` L${w} ${h} Z`;
+  const grid = pts.map((p) => `<line x1="${p[0].toFixed(1)}" y1="8" x2="${p[0].toFixed(1)}" y2="${h - 8}" stroke="#2f2f2f" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
+  return `<div class="ritmo-chart"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <defs><linearGradient id="ritmoFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="rgba(242,223,158,0.32)"/>
+        <stop offset="1" stop-color="rgba(242,223,158,0)"/>
+      </linearGradient></defs>
+      ${grid}
+      <path d="${area}" fill="url(#ritmoFill)"/>
+      <path d="${line}" fill="none" stroke="#f2df9e" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    </svg></div>`;
 }
 
 /* ---------------- Luz da cena (complemento manipulável) ---------------- */
@@ -223,6 +234,106 @@ function cenaLuz(rid, cid) {
   const c = r && r.cenas.find((x) => x.id === cid);
   return c && c.luz ? c.luz : Object.assign({}, LUZ_DEFAULT);
 }
+
+/* ---------------- Modo Livre: compor a cena ----------------
+   Palco 16:9: fundo (foto/cenário/nenhum) desfocável + elementos
+   (pessoa/formas) arrastáveis e redimensionáveis + luz que ilumina
+   o cenário e projeta sombra nos elementos.
+   Modelo: c.comp = { blur:0..16, bg:'auto'|'none', elements:[{id,tipo,x,y,size}] }
+   Luz: reaproveita c.luz (a mesma da seção "Luz da cena").
+   ------------------------------------------------------------ */
+let compSel = null; // id do elemento selecionado (não persistido)
+const PAL_LABEL = { pessoa: "Pessoa", circulo: "Círculo", quadrado: "Quadrado", retangulo: "Retângulo", triangulo: "Triângulo" };
+const PAL_ICON = { pessoa: "ti-user", circulo: "ti-circle", quadrado: "ti-square", retangulo: "ti-rectangle", triangulo: "ti-triangle" };
+
+// Normaliza c.comp (migra o "subj" antigo pra elements).
+function compData(c) {
+  const comp = (c && c.comp) || {};
+  let elements = comp.elements;
+  if (!elements) {
+    elements = comp.subj ? [{ id: "el_0", tipo: "pessoa", x: comp.subj.x, y: comp.subj.y, size: comp.subj.size }] : [];
+  }
+  return { blur: comp.blur || 0, bg: comp.bg || "auto", elements };
+}
+function getComp(rid, cid) { const r = getRoteiro(rid); const c = r && r.cenas.find((x) => x.id === cid); return compData(c || {}); }
+function saveComp(rid, cid, d) { updateCena(rid, cid, { comp: { blur: d.blur, bg: d.bg, elements: d.elements } }); }
+function rawLuz(rid, cid) { const r = getRoteiro(rid); const c = r && r.cenas.find((x) => x.id === cid); return (c && c.luz) || null; }
+function compTemAlgo(c) { const d = compData(c); return !!(d.elements.length || d.blur || (c && c.luz)); }
+
+function addElemento(rid, cid, tipo) {
+  const d = getComp(rid, cid);
+  const el = { id: uid("el"), tipo, x: 50, y: tipo === "pessoa" ? 58 : 50, size: tipo === "pessoa" ? 24 : 20 };
+  d.elements = d.elements.concat([el]);
+  saveComp(rid, cid, d);
+  return el.id;
+}
+function updateElemento(rid, cid, elid, patch) {
+  const d = getComp(rid, cid);
+  d.elements = d.elements.map((e) => (e.id === elid ? Object.assign({}, e, patch) : e));
+  saveComp(rid, cid, d);
+}
+function removeElemento(rid, cid, elid) {
+  const d = getComp(rid, cid);
+  d.elements = d.elements.filter((e) => e.id !== elid);
+  saveComp(rid, cid, d);
+}
+function setCompBg(rid, cid, bg) { const d = getComp(rid, cid); d.bg = bg; saveComp(rid, cid, d); }
+
+function shapeDefs() {
+  return `<svg class="comp-defs" aria-hidden="true" width="0" height="0"><defs>
+      <linearGradient id="elGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#252b36"/><stop offset="1" stop-color="#05070a"/>
+      </linearGradient></defs></svg>`;
+}
+function shapeSvg(tipo) {
+  const st = `fill="url(#elGrad)" stroke="rgba(255,255,255,0.24)" stroke-width="1.4"`;
+  if (tipo === "circulo") return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" ${st}/></svg>`;
+  if (tipo === "quadrado") return `<svg viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="8" ${st}/></svg>`;
+  if (tipo === "retangulo") return `<svg viewBox="0 0 140 90"><rect x="5" y="5" width="130" height="80" rx="8" ${st}/></svg>`;
+  if (tipo === "triangulo") return `<svg viewBox="0 0 100 100"><path d="M50 8 L94 92 L6 92 Z" ${st} stroke-linejoin="round"/></svg>`;
+  return `<svg viewBox="0 0 40 96"><circle cx="20" cy="12" r="9" ${st}/><path d="M6 96 C6 46 11 32 20 32 C29 32 34 46 34 96 Z" ${st}/></svg>`;
+}
+// Sombra do elemento na direção oposta à luz (dá a sensação de interação).
+function elShadow(el, luz) {
+  if (!luz || luz.contra) return "drop-shadow(0 5px 9px rgba(0,0,0,0.55))";
+  const dx = Math.max(-9, Math.min(9, (el.x - luz.x) / 7));
+  const dy = Math.max(-3, Math.min(11, (el.y - luz.y) / 7 + 3));
+  return `drop-shadow(${dx.toFixed(1)}px ${dy.toFixed(1)}px 8px rgba(0,0,0,0.6))`;
+}
+// Palco interativo (thumb=false) ou miniatura (thumb=true, sem ids/eventos).
+function compStageHtml(c, thumb) {
+  const d = compData(c);
+  const luz = c && c.luz;
+  const bgOn = d.bg !== "none";
+  const bgInner = !bgOn ? "" :
+    (c && c.imagemId ? `<img class="comp-bg-img" data-img="${c.imagemId}" alt="">` : `<div class="comp-bg-scene"></div>`);
+  const light = luz ? `<div class="comp-light"${thumb ? "" : ` id="comp-light"`} style="background:${luzGlowBg(luz)}"></div>` : "";
+  const handle = (!thumb && luz && !luz.contra)
+    ? `<div class="comp-luz-handle" id="comp-luz-handle" style="left:${luz.x}%;top:${luz.y}%"><i class="ti ti-sun"></i></div>` : "";
+  const els = d.elements.map((el) => {
+    const sel = (!thumb && compSel === el.id) ? " selected" : "";
+    return `<div class="comp-el${sel}"${thumb ? "" : ` data-elid="${el.id}"`} data-x="${el.x}" data-y="${el.y}" style="left:${el.x}%;top:${el.y}%;width:${el.size}%;filter:${elShadow(el, luz)}">${shapeSvg(el.tipo)}</div>`;
+  }).join("");
+  const vazio = (!thumb && !d.elements.length)
+    ? `<div class="comp-empty"><i class="ti ti-shape"></i> Adicione um sujeito ou forma</div>` : "";
+  return `<div class="comp-stage${thumb ? " thumb-comp" : ""}"${thumb ? "" : ` id="comp-stage"`}>
+      ${shapeDefs()}
+      <div class="comp-bg"${thumb ? "" : ` id="comp-bg"`} style="filter:blur(${d.blur}px)">${bgInner}</div>
+      ${light}${els}${handle}${vazio}
+    </div>`;
+}
+function compThumb(c) { return compStageHtml(c, true); }
+// Atualiza glow + handle + sombras ao vivo enquanto arrasta a luz.
+function aplicarLuzComp(luz) {
+  const glow = document.getElementById("comp-light");
+  if (glow) glow.style.background = luzGlowBg(luz);
+  const h = document.getElementById("comp-luz-handle");
+  if (h) { h.style.left = luz.x + "%"; h.style.top = luz.y + "%"; }
+  document.querySelectorAll("#comp-stage .comp-el").forEach((dv) => {
+    dv.style.filter = elShadow({ x: +dv.getAttribute("data-x"), y: +dv.getAttribute("data-y") }, luz);
+  });
+}
+
 function tecnica(id) { return window.TECNICAS.find((t) => t.id === id); }
 function categoria(id) { return window.CATEGORIAS.find((c) => c.id === id); }
 function esc(s) {
@@ -342,8 +453,36 @@ window.addEventListener("load", () => {
   if (!location.hash) location.hash = "#/";
   render();
 });
+// Nuvem: re-renderiza quando o login muda ou quando o sync traz dados.
+window.addEventListener("cloud-auth", () => render());
+window.addEventListener("cloud-synced", () => render());
 
 /* ---------------- Componentes base ---------------- */
+
+// Estado das seções recolhíveis (sobrevive a re-renders da mesma sessão).
+const accOpen = {};
+function accHtml(key, icon, title, val, isSet, body, defOpen = false) {
+  const open = key in accOpen ? accOpen[key] : defOpen;
+  return `<details class="acc" data-key="${esc(key)}" ${open ? "open" : ""}>
+      <summary>
+        <i class="ti ${esc(icon)} acc-ic"></i>
+        <span class="acc-meta"><span class="acc-tit">${title}</span><span class="acc-val ${isSet ? "set" : ""}">${val}</span></span>
+        <i class="ti ti-chevron-down acc-chev"></i>
+      </summary>
+      <div class="acc-body">${body}</div>
+    </details>`;
+}
+function bindAccs() {
+  document.querySelectorAll("details.acc[data-key]").forEach((el) => {
+    el.addEventListener("toggle", () => { accOpen[el.getAttribute("data-key")] = el.open; });
+  });
+}
+
+function progbar(done, total) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return `<div class="progbar ${done === total && total ? "done" : ""}"><div style="width:${pct}%"></div></div>`;
+}
+
 function topbar(title, opts = {}) {
   const back = opts.back
     ? `<button class="icon-btn" data-act="${esc(opts.back)}" aria-label="Voltar"><i class="ti ti-arrow-left"></i></button>`
@@ -351,41 +490,207 @@ function topbar(title, opts = {}) {
   const right = opts.right || "";
   return `<div class="topbar">${back}<h1>${esc(title)}</h1>${right}</div>`;
 }
+// Navegação lateral (desktop, estilo Steam). No mobile fica escondida via CSS.
+function sideNav(active) {
+  const item = (href, icon, label, key) =>
+    `<a href="${href}" class="side-item ${active === key ? "active" : ""}"><i class="ti ${icon}"></i><span>${label}</span></a>`;
+  return `<aside class="app-sidebar">
+    <div class="side-brand"><i class="ti ti-movie"></i> Diretor</div>
+    <nav class="side-nav">
+      ${item("#/", "ti-clapperboard", "Roteiros", "roteiros")}
+      ${item("#/acervo", "ti-books", "Acervo", "acervo")}
+      ${item("#/config", "ti-settings", "Configurações", "config")}
+    </nav>
+  </aside>`;
+}
+
 function bottomNav(active) {
   const item = (href, icon, label, key) =>
     `<a href="${href}" class="${active === key ? "active" : ""}"><i class="ti ${icon}"></i>${label}</a>`;
-  return `<div class="bottom-nav">
+  return sideNav(active) + `<div class="bottom-nav">
     ${item("#/", "ti-clapperboard", "Roteiros", "roteiros")}
     ${item("#/acervo", "ti-books", "Acervo", "acervo")}
   </div>`;
 }
 
+/* ---------------- Diálogos, action sheet e toast ----------------
+   Substituem prompt()/confirm()/alert() nativos por UI do próprio app.
+   Todos retornam Promise, então dá pra usar `await` nos handlers.
+   ------------------------------------------------------------------ */
+function closeOverlay(ov) {
+  ov.classList.add("closing");
+  setTimeout(() => ov.remove(), 170);
+}
+function mkOverlay(html, cls) {
+  const ov = document.createElement("div");
+  ov.className = "overlay " + (cls || "");
+  ov.innerHTML = html;
+  document.body.appendChild(ov);
+  return ov;
+}
+
+function confirmDialog(opts) {
+  const o = Object.assign({ title: "", message: "", confirm: "Confirmar", cancel: "Cancelar", danger: false }, opts);
+  return new Promise((resolve) => {
+    const ov = mkOverlay(`
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-body">
+          ${o.title ? `<h2 class="modal-title">${esc(o.title)}</h2>` : ""}
+          ${o.message ? `<p class="modal-msg">${esc(o.message)}</p>` : ""}
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" data-x="0">${esc(o.cancel)}</button>
+          <button class="btn ${o.danger ? "btn-danger-solid" : "btn-primary"}" data-x="1">${esc(o.confirm)}</button>
+        </div>
+      </div>`, "modal-overlay");
+    let done = false;
+    const onKey = (e) => { if (e.key === "Escape") finish(false); };
+    const finish = (v) => {
+      if (done) return; done = true;
+      document.removeEventListener("keydown", onKey);
+      closeOverlay(ov); resolve(v);
+    };
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) return finish(false);
+      const b = e.target.closest("[data-x]");
+      if (b) finish(b.getAttribute("data-x") === "1");
+    });
+    document.addEventListener("keydown", onKey);
+    const ok = ov.querySelector('[data-x="1"]'); if (ok) ok.focus();
+  });
+}
+
+function alertDialog(opts) {
+  const o = Object.assign({ title: "", message: "", ok: "OK" }, opts);
+  return new Promise((resolve) => {
+    const ov = mkOverlay(`
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-body">
+          ${o.title ? `<h2 class="modal-title">${esc(o.title)}</h2>` : ""}
+          ${o.message ? `<p class="modal-msg">${esc(o.message)}</p>` : ""}
+        </div>
+        <div class="modal-actions"><button class="btn btn-primary" data-x="1">${esc(o.ok)}</button></div>
+      </div>`, "modal-overlay");
+    let done = false;
+    const finish = () => { if (done) return; done = true; closeOverlay(ov); resolve(); };
+    ov.addEventListener("click", (e) => { if (e.target === ov || e.target.closest("[data-x]")) finish(); });
+    const ok = ov.querySelector('[data-x="1"]'); if (ok) ok.focus();
+  });
+}
+
+function promptDialog(opts) {
+  const o = Object.assign({ title: "", label: "", value: "", placeholder: "", confirm: "Salvar", cancel: "Cancelar" }, opts);
+  return new Promise((resolve) => {
+    const ov = mkOverlay(`
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-body">
+          ${o.title ? `<h2 class="modal-title">${esc(o.title)}</h2>` : ""}
+          ${o.label ? `<span class="label">${esc(o.label)}</span>` : ""}
+          <input id="modal-input" type="text" value="${esc(o.value)}" placeholder="${esc(o.placeholder)}" autocomplete="off">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" data-x="0">${esc(o.cancel)}</button>
+          <button class="btn btn-primary" data-x="1">${esc(o.confirm)}</button>
+        </div>
+      </div>`, "modal-overlay");
+    const input = ov.querySelector("#modal-input");
+    let done = false;
+    const onKey = (e) => { if (e.key === "Escape") finish(null); };
+    const finish = (v) => {
+      if (done) return; done = true;
+      document.removeEventListener("keydown", onKey);
+      closeOverlay(ov); resolve(v);
+    };
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) return finish(null);
+      const b = e.target.closest("[data-x]");
+      if (b) finish(b.getAttribute("data-x") === "1" ? input.value.trim() : null);
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") finish(input.value.trim()); });
+    document.addEventListener("keydown", onKey);
+    setTimeout(() => { input.focus(); input.select(); }, 60);
+  });
+}
+
+// actionSheet({title, actions:[{id, label, icon, danger}]}) -> resolve(id | null)
+function actionSheet(opts) {
+  const o = Object.assign({ title: "", actions: [] }, opts);
+  return new Promise((resolve) => {
+    const rows = o.actions.map((a) => `
+      <button class="action-row ${a.danger ? "danger" : ""}" data-id="${esc(a.id)}">
+        ${a.icon ? `<i class="ti ${esc(a.icon)}"></i>` : ""}<span>${esc(a.label)}</span>
+      </button>`).join("");
+    const ov = mkOverlay(`
+      <div class="sheet action-sheet">
+        <div class="sheet-head">
+          <h2>${esc(o.title)}</h2>
+          <button class="icon-btn" data-id="__close" aria-label="Fechar"><i class="ti ti-x"></i></button>
+        </div>
+        <div class="sheet-body">${rows}</div>
+      </div>`, "");
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; closeOverlay(ov); resolve(v); };
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) return finish(null);
+      const b = e.target.closest("[data-id]");
+      if (!b) return;
+      const id = b.getAttribute("data-id");
+      finish(id === "__close" ? null : id);
+    });
+  });
+}
+
+let toastTimer = null;
+function toast(msg, opts) {
+  const o = Object.assign({ icon: "ti-check", ms: 2200 }, opts);
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.body.appendChild(t); }
+  t.innerHTML = `<i class="ti ${esc(o.icon)}"></i><span>${esc(msg)}</span>`;
+  t.classList.remove("show");
+  void t.offsetWidth; // reinicia a transição
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), o.ms);
+}
+
 /* ---------------- Telas ---------------- */
 function viewHome() {
   const roteiros = store.getRoteiros().sort((a, b) => b.atualizadoEm - a.atualizadoEm);
-  const lista = roteiros.length
-    ? `<div class="list">${roteiros.map((r) => `
-        <div class="roteiro-item" data-act="open-roteiro" data-id="${r.id}">
+
+  const corpo = roteiros.length
+    ? `<div class="list">${roteiros.map((r) => {
+        const n = r.cenas.length;
+        const g = r.cenas.filter((c) => c.gravada).length;
+        const sub = n ? `${plural(n, "cena", "cenas")} · ${g}/${n} gravadas` : "Sem cenas ainda";
+        return `<div class="roteiro-item" data-act="open-roteiro" data-id="${r.id}">
           <div class="meta">
             <p class="nome">${esc(r.nome)}</p>
-            <p class="sub">${plural(r.cenas.length, "cena", "cenas")}</p>
+            <p class="sub">${sub}</p>
+            ${n ? `<div class="progbar mini ${g === n ? "done" : ""}"><div style="width:${Math.round((g / n) * 100)}%"></div></div>` : ""}
           </div>
           <i class="ti ti-chevron-right chev"></i>
-        </div>`).join("")}</div>`
-    : `<div class="empty-state">
-         <i class="ti ti-clapperboard"></i>
-         <p>Nenhum roteiro ainda.<br>Crie o primeiro e comece a montar suas cenas.</p>
+        </div>`;
+      }).join("")}</div>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" data-act="novo-roteiro"><i class="ti ti-plus"></i> Novo roteiro</button>`
+    : `<div class="onboarding">
+         <div class="ob-icon"><i class="ti ti-clapperboard"></i></div>
+         <h2>Planeje seus vídeos, cena por cena</h2>
+         <p>Crie um roteiro, adicione cenas e escolha a técnica visual de cada uma. Tudo salva sozinho no aparelho.</p>
+         <div class="ob-steps">
+           <div class="ob-step"><span class="ob-n">1</span> Crie um roteiro</div>
+           <div class="ob-step"><span class="ob-n">2</span> Monte as cenas com uma referência visual</div>
+           <div class="ob-step"><span class="ob-n">3</span> Marque como gravada conforme filma</div>
+         </div>
+         <button class="btn btn-primary" data-act="novo-roteiro"><i class="ti ti-plus"></i> Criar primeiro roteiro</button>
+         <button class="btn btn-ghost" data-act="go-acervo"><i class="ti ti-books"></i> Explorar técnicas</button>
        </div>`;
 
   app.innerHTML =
     topbar("Meus roteiros", {
       right: `<button class="icon-btn" data-act="abrir-config" aria-label="Configurações"><i class="ti ti-settings"></i></button>`
     }) +
-    `<div class="content">
-       ${lista}
-       <div class="spacer"></div>
-       <button class="btn btn-primary" data-act="novo-roteiro"><i class="ti ti-plus"></i> Novo roteiro</button>
-     </div>` +
+    `<div class="content">${corpo}</div>` +
     bottomNav("roteiros");
 }
 
@@ -393,50 +698,58 @@ function viewRoteiro(id) {
   const r = getRoteiro(id);
   if (!r) { go("#/"); return; }
 
+  const arrastavel = r.cenas.length > 1;
   const cenas = r.cenas.map((c, i) => {
     const tec = tecnica(c.tecnicaId);
     const f = funcao(c.funcao);
     const emo = emocao(c.emocao);
-    const tags =
+    const metaTags =
+      (tec ? `<span class="tag tag-tec"><i class="ti ${esc(tec.icone)}"></i> ${esc(tec.nome)}</span>` : "") +
       (f ? `<span class="tag tag-fn">${esc(f.nome)}</span>` : "") +
       (emo ? `<span class="tag tag-emo">${esc(emo.nome)}</span>` : "") +
       (c.luz ? `<span class="tag tag-luz"><i class="ti ti-bulb"></i> ${esc(luzLabel(c.luz))}</span>` : "");
-    const badge = tec ? `<span class="badge">${esc(tec.nome)}</span><br>` : "";
     const descCls = c.descricao ? "desc" : "desc empty";
     const descTxt = c.descricao ? esc(c.descricao) : (c.dica ? esc(c.dica) : "Toque pra escrever a descrição…");
-    const thumb = c.imagemId
-      ? `<div class="thumb img"><img data-img="${c.imagemId}" alt=""></div>`
-      : tec
-        ? `<div class="thumb diag">${diagrama(tec.id) || `<i class="ti ${esc(tec.icone)}"></i>`}${luzOverlay(c.luz)}</div>`
-        : `<div class="thumb"><i class="ti ti-photo"></i><span>referência</span></div>`;
-    const check = c.gravada ? ` · <span class="grav-ok"><i class="ti ti-circle-check"></i> gravada</span>` : "";
-    return `<div class="cena" data-act="open-cena" data-rid="${r.id}" data-cid="${c.id}">
+    const thumb = compTemAlgo(c)
+      ? `<div class="thumb comp-thumb">${compThumb(c)}</div>`
+      : c.imagemId
+        ? `<div class="thumb img"><img data-img="${c.imagemId}" alt=""></div>`
+        : tec
+          ? `<div class="thumb diag">${diagrama(tec.id) || `<i class="ti ${esc(tec.icone)}"></i>`}${luzOverlay(c.luz)}</div>`
+          : `<div class="thumb"><i class="ti ti-photo"></i><span>referência</span></div>`;
+    return `<div class="cena ${c.gravada ? "gravada" : ""}" data-act="open-cena" data-rid="${r.id}" data-cid="${c.id}">
         ${thumb}
         <div class="body">
-          <p class="num">Cena ${i + 1}${check}</p>
-          ${tags ? `<div class="tags">${tags}</div>` : ""}
-          ${badge}
+          <div class="num-row">
+            <span class="num">Cena ${i + 1}</span>
+            ${c.gravada ? `<span class="grav-ok"><i class="ti ti-circle-check"></i> gravada</span>` : ""}
+          </div>
           <p class="${descCls}">${descTxt}</p>
+          ${metaTags ? `<div class="tags">${metaTags}</div>` : ""}
         </div>
+        ${arrastavel ? `<div class="drag-handle" aria-label="Arrastar para reordenar"><i class="ti ti-grip-vertical"></i></div>` : ""}
       </div>`;
   }).join("");
 
-  const msgBox = `
-    <div class="field">
-      <span class="label"><i class="ti ti-bulb" style="color:var(--accent);vertical-align:-2px"></i> Mensagem do vídeo</span>
-      <textarea id="roteiro-msg" rows="2" placeholder="O que esse vídeo diz? O que o viewer deve sentir/entender?">${esc(r.mensagem || "")}</textarea>
-    </div>`;
+  const msgResumo = (r.mensagem || "").trim();
+  const msgBox = accHtml("rot:" + id + ":msg", "ti-bulb", "Mensagem do vídeo",
+    msgResumo ? esc(msgResumo) : "O que o viewer deve sentir ou entender?",
+    !!msgResumo,
+    `<textarea id="roteiro-msg" rows="2" placeholder="O que esse vídeo diz? O que o viewer deve sentir/entender?">${esc(r.mensagem || "")}</textarea>`,
+    false);
 
   const gravadas = r.cenas.filter((c) => c.gravada).length;
   const ritmo = r.cenas.length
-    ? `<p class="section-title">Ritmo (energia das cenas)</p>
-       <div class="card" style="margin-bottom:16px">${curvaRitmo(r.cenas)}</div>`
+    ? accHtml("rot:" + id + ":ritmo", "ti-activity", "Ritmo do vídeo",
+        "Energia das cenas ao longo da história", false,
+        curvaRitmo(r.cenas), false)
     : "";
   const progresso = r.cenas.length
-    ? `<div class="prog">
-         <span>${gravadas} de ${r.cenas.length} gravadas</span>
+    ? `<div class="prog mt-3">
+         <span><strong>${gravadas}</strong> de ${r.cenas.length} gravadas</span>
          <button class="btn-mini" data-act="modo-gravacao" data-id="${r.id}"><i class="ti ti-checklist"></i> Checklist</button>
-       </div>`
+       </div>
+       ${progbar(gravadas, r.cenas.length)}`
     : "";
 
   const modelos = `
@@ -452,9 +765,12 @@ function viewRoteiro(id) {
           <i class="ti ti-chevron-right chev"></i>
         </button>`).join("")}
     </div>
-    <p class="hint" style="margin-top:10px">O modelo cria as cenas já com a função na narrativa — você só preenche.</p>`;
+    <p class="hint mt-2">O modelo cria as cenas já com a função na narrativa — você só preenche.</p>`;
 
-  const corpo = r.cenas.length ? `<div class="list">${cenas}</div>` : modelos;
+  const dicaReorder = r.cenas.length > 1
+    ? `<p class="reorder-hint"><i class="ti ti-arrows-move"></i> Arraste os cards para reordenar as cenas</p>`
+    : "";
+  const corpo = r.cenas.length ? `${dicaReorder}<div class="list">${cenas}</div>` : modelos;
 
   app.innerHTML =
     topbar(r.nome, {
@@ -472,6 +788,8 @@ function viewRoteiro(id) {
     bottomNav("roteiros");
 
   hydrateImgs();
+  bindAccs();
+  if (r.cenas.length > 1) initReorder(document.querySelector(".content .list"), id);
 
   const msgEl = document.getElementById("roteiro-msg");
   if (msgEl) msgEl.addEventListener("input", () => updateRoteiro(id, { mensagem: msgEl.value }));
@@ -485,9 +803,7 @@ function viewCena(rid, cid) {
   const c = r.cenas[idx];
   const tec = tecnica(c.tecnicaId);
 
-  const refBlock = `
-    <div class="field">
-      <span class="label">Insight visual (referência)</span>
+  const refBody = `
       ${tec ? `
         <div class="card" style="margin-bottom:10px;display:flex;align-items:center;gap:12px;">
           <i class="ti ${esc(tec.icone)}" style="font-size:24px;color:var(--accent)"></i>
@@ -505,11 +821,14 @@ function viewCena(rid, cid) {
             style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.6);color:#fff"><i class="ti ti-trash"></i></button>
         </div>` : ""}
       ${(tec && !c.imagemId) ? `<div class="diagram sm" style="margin-bottom:10px">${diagrama(tec.id)}${luzOverlay(c.luz)}</div>` : ""}
+      ${(!tec && !c.imagemId) ? `<p class="hint" style="margin:0 0 12px">Escolha uma técnica do acervo (o desenho vira sua referência) ou adicione uma foto sua.</p>` : ""}
       <div class="btn-row">
         <button class="btn btn-outline" data-act="escolher-tecnica" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-books"></i> ${tec ? "Trocar técnica" : "Escolher técnica"}</button>
         <button class="btn btn-outline" data-act="add-foto" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-camera"></i> ${c.imagemId ? "Trocar foto" : "Adicionar foto"}</button>
-      </div>
-    </div>`;
+      </div>`;
+  const refVal = tec ? esc(tec.nome) + (c.imagemId ? " · foto" : "")
+    : c.imagemId ? "Foto adicionada"
+    : "Como filmar — técnica ou foto de referência";
 
   const sugIds = c.emocao ? (window.EMOCAO_TECNICAS[c.emocao] || []) : [];
   const sugestoes = c.emocao ? `
@@ -524,7 +843,7 @@ function viewCena(rid, cid) {
       </div>
     </div>` : "";
 
-  const intencaoBlock = `
+  const intencaoBody = `
     <div class="field">
       <span class="label">Emoção-alvo — o que o viewer deve sentir?</span>
       <div class="emo-chips">
@@ -538,13 +857,15 @@ function viewCena(rid, cid) {
         ${(window.FUNCOES || []).map((f) => `<button class="emo-chip ${c.funcao === f.id ? "active" : ""}" data-act="set-funcao" data-rid="${rid}" data-cid="${cid}" data-fn="${f.id}">${esc(f.nome)}</button>`).join("")}
       </div>
     </div>`;
+  const fAtual = funcao(c.funcao);
+  const emoAtual = emocao(c.emocao);
+  const intVal = [emoAtual && emoAtual.nome, fAtual && fAtual.nome].filter(Boolean).map(esc).join(" · ")
+    || "O que o viewer sente + papel na história";
 
   const lz = c.luz;
   const chipLuz = (preset, rotulo, ativo) =>
     `<button class="emo-chip ${ativo ? "active" : ""}" data-act="set-luz-preset" data-rid="${rid}" data-cid="${cid}" data-preset="${preset}">${rotulo}</button>`;
-  const luzBlock = `
-    <div class="field">
-      <span class="label">Luz da cena (complemento)</span>
+  const luzBody = `
       ${lz ? `
         ${luzStage(lz)}
         <div class="emo-chips" style="margin-top:10px">
@@ -572,12 +893,69 @@ function viewCena(rid, cid) {
             </div>
           </div>
         </div>
-        <p class="hint" style="margin-top:8px">Arraste o sol pra mover a luz. Ela aparece por cima da ilustração da cena.</p>
-        <button class="btn btn-danger" data-act="rm-luz" data-rid="${rid}" data-cid="${cid}" style="margin-top:10px"><i class="ti ti-x"></i> Remover luz</button>
+        <p class="hint mt-2">Arraste o sol pra mover a luz. Ela aparece por cima da ilustração da cena.</p>
+        <button class="btn btn-danger mt-2" data-act="rm-luz" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-x"></i> Remover luz</button>
       ` : `
+        <p class="hint" style="margin:0 0 12px">Defina de onde vem a luz — ela aparece por cima da ilustração da cena.</p>
         <button class="btn btn-outline" data-act="add-luz" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-bulb"></i> Adicionar luz à cena</button>
-      `}
-    </div>`;
+      `}`;
+  const luzVal = lz
+    ? esc(luzLabel(lz)) + " · " + (lz.cor === "quente" ? "quente" : lz.cor === "fria" ? "fria" : "neutra") + (lz.contra ? "" : lz.suave ? " · suave" : " · dura")
+    : "Opcional — posição e cor da luz";
+  const detVal = [c.local, c.horario, c.equipamento].filter(Boolean).map(esc).join(" · ")
+    || "Local, horário e equipamento";
+
+  // Modo Livre (compor cena)
+  const cd = compData(c);
+  const selEl = cd.elements.find((e) => e.id === compSel);
+  const paleta = ["pessoa", "circulo", "quadrado", "retangulo", "triangulo"];
+  const bgLabel = c.imagemId ? "Sua foto" : "Cenário";
+  const compBody = `
+      ${compStageHtml(c, false)}
+      <div class="comp-controls">
+        <div class="comp-group">
+          <span class="comp-sub">Adicionar elemento</span>
+          <div class="comp-pal">
+            ${paleta.map((t) => `<button class="comp-pal-btn" data-act="comp-add-el" data-rid="${rid}" data-cid="${cid}" data-tipo="${t}"><i class="ti ${PAL_ICON[t]}"></i>${PAL_LABEL[t]}</button>`).join("")}
+          </div>
+        </div>
+
+        <div class="comp-sel-ctl${selEl ? "" : " off"}" id="comp-sel-ctl">
+          <label class="comp-ctl"><span><i class="ti ti-arrows-diagonal"></i> Tamanho ${selEl ? "(" + PAL_LABEL[selEl.tipo].toLowerCase() + ")" : "— toque num elemento"}</span>
+            <input type="range" id="comp-el-size" min="6" max="72" step="1" value="${selEl ? selEl.size : 24}" ${selEl ? "" : "disabled"}></label>
+          <button class="btn btn-danger" data-act="comp-del-el" data-rid="${rid}" data-cid="${cid}" ${selEl ? "" : "disabled"}><i class="ti ti-trash"></i> Excluir elemento</button>
+        </div>
+
+        <div class="comp-group">
+          <span class="comp-sub">Fundo</span>
+          <div class="seg">
+            <button class="seg-btn ${cd.bg !== "none" ? "active" : ""}" data-act="comp-bg" data-rid="${rid}" data-cid="${cid}" data-bg="auto">${bgLabel}</button>
+            <button class="seg-btn ${cd.bg === "none" ? "active" : ""}" data-act="comp-bg" data-rid="${rid}" data-cid="${cid}" data-bg="none">Nenhum</button>
+          </div>
+        </div>
+
+        ${cd.bg !== "none" ? `<label class="comp-ctl"><span><i class="ti ti-blur"></i> Desfoque do fundo</span>
+          <input type="range" id="comp-blur" min="0" max="16" step="1" value="${cd.blur}"></label>` : ""}
+
+        <div class="comp-group">
+          <span class="comp-sub">Luz da cena</span>
+          ${c.luz ? `
+            <div class="emo-chips">
+              <button class="emo-chip ${c.luz.cor === "quente" ? "active" : ""}" data-act="comp-luz-cor" data-rid="${rid}" data-cid="${cid}" data-cor="quente">Quente</button>
+              <button class="emo-chip ${c.luz.cor === "neutra" ? "active" : ""}" data-act="comp-luz-cor" data-rid="${rid}" data-cid="${cid}" data-cor="neutra">Neutra</button>
+              <button class="emo-chip ${c.luz.cor === "fria" ? "active" : ""}" data-act="comp-luz-cor" data-rid="${rid}" data-cid="${cid}" data-cor="fria">Fria</button>
+              <button class="emo-chip ${c.luz.contra ? "active" : ""}" data-act="comp-luz-contra" data-rid="${rid}" data-cid="${cid}">Contraluz</button>
+            </div>
+            <button class="btn btn-outline mt-2" data-act="comp-luz-rm" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-bulb-off"></i> Remover luz</button>
+            <p class="hint mt-2">Arraste o sol no palco pra mover a luz — o fundo acende e os elementos ganham sombra na direção certa.</p>
+          ` : `
+            <button class="btn btn-outline" data-act="comp-luz-add" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-bulb"></i> Adicionar luz</button>
+          `}
+        </div>
+      </div>`;
+  const compVal = compTemAlgo(c)
+    ? [cd.elements.length ? plural(cd.elements.length, "elemento", "elementos") : "", cd.blur ? "desfoque " + cd.blur : "", c.luz ? "com luz" : ""].filter(Boolean).join(" · ")
+    : "Monte a cena: formas, fundo e luz";
 
   app.innerHTML =
     topbar("Cena " + (idx + 1), {
@@ -585,29 +963,30 @@ function viewCena(rid, cid) {
       right: `<button class="icon-btn" data-act="del-cena" data-rid="${rid}" data-cid="${cid}" aria-label="Excluir cena"><i class="ti ti-trash"></i></button>`
     }) +
     `<div class="content">
-       ${intencaoBlock}
-       ${refBlock}
-       ${luzBlock}
        <div class="field">
-         <span class="label">Descrição da cena</span>
-         <textarea id="cena-desc" rows="5" placeholder="${esc(c.dica || "O que acontece nessa cena? O que você vai filmar?")}">${esc(c.descricao)}</textarea>
+         <span class="label">O que acontece nessa cena?</span>
+         <textarea id="cena-desc" rows="4" placeholder="${esc(c.dica || "Descreva o que você vai filmar…")}">${esc(c.descricao)}</textarea>
        </div>
 
-       <div class="field">
-         <span class="label">Detalhes da gravação (opcional)</span>
+       ${accHtml("cena:" + cid + ":comp", "ti-stack-2", "Compor cena (livre)", compVal, compTemAlgo(c), compBody, true)}
+       ${accHtml("cena:" + cid + ":ref", "ti-camera", "Referência visual", refVal, !!(tec || c.imagemId), refBody, false)}
+       ${accHtml("cena:" + cid + ":int", "ti-mood-smile", "Intenção da cena", intVal, !!(emoAtual || fAtual), intencaoBody, false)}
+       ${accHtml("cena:" + cid + ":luz", "ti-bulb", "Luz da cena", luzVal, !!lz, luzBody, false)}
+       ${accHtml("cena:" + cid + ":det", "ti-map-pin", "Detalhes da gravação", detVal, !!(c.local || c.horario || c.equipamento), `
          <input id="cena-local" type="text" placeholder="Local (ex: pista, parque)" value="${esc(c.local || "")}" style="margin-bottom:8px">
          <input id="cena-horario" type="text" placeholder="Horário / luz (ex: golden hour)" value="${esc(c.horario || "")}" style="margin-bottom:8px">
-         <input id="cena-equip" type="text" placeholder="Equipamento (ex: celular + gimbal)" value="${esc(c.equipamento || "")}">
-       </div>
+         <input id="cena-equip" type="text" placeholder="Equipamento (ex: celular + gimbal)" value="${esc(c.equipamento || "")}">`, false)}
 
-       <button class="btn ${c.gravada ? "btn-primary" : "btn-outline"}" data-act="toggle-gravada" data-rid="${rid}" data-cid="${cid}">
+       <div class="spacer-sm"></div>
+       <button class="btn ${c.gravada ? "btn-ok" : "btn-outline"}" data-act="toggle-gravada" data-rid="${rid}" data-cid="${cid}">
          <i class="ti ${c.gravada ? "ti-circle-check" : "ti-circle"}"></i> ${c.gravada ? "Gravada ✓" : "Marcar como gravada"}
        </button>
-       <p class="hint" style="margin-top:12px">A referência fica em cima, a descrição embaixo. Tudo salva sozinho.</p>
+       <p class="hint mt-3 tc">Tudo salva sozinho enquanto você edita.</p>
      </div>` +
     bottomNav("roteiros");
 
   hydrateImgs();
+  bindAccs();
 
   const bind = (id, campo) => {
     const el = document.getElementById(id);
@@ -617,6 +996,88 @@ function viewCena(rid, cid) {
   bind("cena-local", "local");
   bind("cena-horario", "horario");
   bind("cena-equip", "equipamento");
+
+  // Modo Livre: seleciona um elemento (sem re-render) e sincroniza controles.
+  const selecionarEl = (elid) => {
+    compSel = elid;
+    const st = document.getElementById("comp-stage");
+    if (st) st.querySelectorAll(".comp-el").forEach((dv) => dv.classList.toggle("selected", dv.getAttribute("data-elid") === elid));
+    const el = getComp(rid, cid).elements.find((e) => e.id === elid);
+    const ctl = document.getElementById("comp-sel-ctl");
+    const sizeInp = document.getElementById("comp-el-size");
+    const delBtn = ctl && ctl.querySelector('[data-act="comp-del-el"]');
+    if (ctl) ctl.classList.toggle("off", !el);
+    if (sizeInp) { sizeInp.disabled = !el; if (el) sizeInp.value = el.size; }
+    if (delBtn) delBtn.disabled = !el;
+  };
+
+  // Desfoque do fundo (ao vivo + persiste)
+  const blurEl = document.getElementById("comp-blur");
+  if (blurEl) blurEl.addEventListener("input", () => {
+    const v = +blurEl.value;
+    const bg = document.getElementById("comp-bg");
+    if (bg) bg.style.filter = "blur(" + v + "px)";
+    const d = getComp(rid, cid); d.blur = v; saveComp(rid, cid, d);
+  });
+
+  // Tamanho do elemento selecionado
+  const elSizeEl = document.getElementById("comp-el-size");
+  if (elSizeEl) elSizeEl.addEventListener("input", () => {
+    if (!compSel) return;
+    const v = +elSizeEl.value;
+    const dv = document.querySelector('.comp-el[data-elid="' + compSel + '"]');
+    if (dv) dv.style.width = v + "%";
+    updateElemento(rid, cid, compSel, { size: v });
+  });
+
+  // Selecionar + arrastar cada elemento no palco
+  const compStage = document.getElementById("comp-stage");
+  if (compStage) {
+    compStage.querySelectorAll(".comp-el").forEach((elDiv) => {
+      const elid = elDiv.getAttribute("data-elid");
+      let dragging = false, pid = null;
+      const moveTo = (cx, cy) => {
+        const rect = compStage.getBoundingClientRect();
+        let x = Math.max(2, Math.min(98, Math.round(((cx - rect.left) / rect.width) * 100)));
+        let y = Math.max(3, Math.min(98, Math.round(((cy - rect.top) / rect.height) * 100)));
+        elDiv.style.left = x + "%"; elDiv.style.top = y + "%";
+        elDiv.setAttribute("data-x", x); elDiv.setAttribute("data-y", y);
+        elDiv.style.filter = elShadow({ x, y }, rawLuz(rid, cid));
+        updateElemento(rid, cid, elid, { x, y });
+      };
+      elDiv.addEventListener("pointerdown", (e) => {
+        dragging = true; pid = e.pointerId; e.preventDefault();
+        selecionarEl(elid);
+        try { elDiv.setPointerCapture(pid); } catch (err) {}
+      });
+      elDiv.addEventListener("pointermove", (e) => { if (dragging) moveTo(e.clientX, e.clientY); });
+      const end = () => { dragging = false; };
+      elDiv.addEventListener("pointerup", end);
+      elDiv.addEventListener("pointercancel", end);
+    });
+  }
+
+  // Arrastar o sol da luz DENTRO do palco de composição
+  const luzHandle = document.getElementById("comp-luz-handle");
+  if (luzHandle && compStage && c.luz && !c.luz.contra) {
+    let dragging = false, pid = null;
+    const move = (cx, cy) => {
+      const rect = compStage.getBoundingClientRect();
+      let x = Math.max(0, Math.min(100, Math.round(((cx - rect.left) / rect.width) * 100)));
+      let y = Math.max(0, Math.min(100, Math.round(((cy - rect.top) / rect.height) * 100)));
+      const luz = Object.assign({}, cenaLuz(rid, cid), { x, y, contra: false });
+      updateCena(rid, cid, { luz });
+      aplicarLuzComp(luz);
+    };
+    luzHandle.addEventListener("pointerdown", (e) => {
+      dragging = true; pid = e.pointerId; e.preventDefault();
+      try { luzHandle.setPointerCapture(pid); } catch (err) {}
+    });
+    luzHandle.addEventListener("pointermove", (e) => { if (dragging) move(e.clientX, e.clientY); });
+    const end = () => { dragging = false; };
+    luzHandle.addEventListener("pointerup", end);
+    luzHandle.addEventListener("pointercancel", end);
+  }
 
   // Arrastar (ou tocar) pra mover a luz dentro do palco.
   const stage = document.getElementById("luz-stage");
@@ -654,12 +1115,21 @@ function viewAcervo() {
       ${window.CATEGORIAS.map((c) => chip(c.id, c.nome)).join("")}
     </div>`;
 
+  // Busca sem acentos: "silencio" acha "Silêncio".
+  const norm = (s) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const lista = window.TECNICAS.filter((t) => catId === "todas" || t.categoria === catId);
   const cards = lista.map((t) => `
-    <button class="tecnica-card" data-act="ver-tecnica" data-tid="${t.id}">
+    <button class="tecnica-card" data-act="ver-tecnica" data-tid="${t.id}" data-nome="${esc(norm(t.nome))}">
       <div class="card-diagram">${diagrama(t.id)}</div>
       <div class="t-nome"><i class="ti ${esc(t.icone)}"></i> ${esc(t.nome)}</div>
+      <div class="t-cat">${esc((categoria(t.categoria) || {}).nome || "")}</div>
     </button>`).join("");
+
+  const busca = `
+    <div class="search-wrap">
+      <i class="ti ti-search"></i>
+      <input id="acervo-busca" type="search" placeholder="Buscar técnica… (ex: silhueta, terços)" autocomplete="off">
+    </div>`;
 
   const guia = `
     <button class="guide-card" data-act="abrir-guia">
@@ -675,10 +1145,28 @@ function viewAcervo() {
     topbar("Acervo de técnicas") +
     `<div class="content">
        ${guia}
+       ${busca}
        ${chips}
-       <div class="grid2">${cards}</div>
+       <div class="grid2" id="acervo-grid">${cards}</div>
+       <p class="hint" id="acervo-vazio" style="display:none;text-align:center;padding:24px 0">Nenhuma técnica com esse nome nessa categoria.</p>
      </div>` +
     bottomNav("acervo");
+
+  // Filtro ao vivo — esconde/mostra cards sem re-render (mantém o foco no campo).
+  const buscaEl = document.getElementById("acervo-busca");
+  if (buscaEl) {
+    buscaEl.addEventListener("input", () => {
+      const q = norm(buscaEl.value.trim());
+      let visiveis = 0;
+      document.querySelectorAll("#acervo-grid .tecnica-card").forEach((el) => {
+        const mostra = !q || (el.getAttribute("data-nome") || "").includes(q);
+        el.style.display = mostra ? "" : "none";
+        if (mostra) visiveis++;
+      });
+      const vazio = document.getElementById("acervo-vazio");
+      if (vazio) vazio.style.display = visiveis ? "none" : "";
+    });
+  }
 }
 
 function viewTecnica(tid) {
@@ -713,12 +1201,12 @@ function viewTecnica(tid) {
 
        <div class="spacer"></div>
        <p class="section-title">Fotos de exemplo (banco livre)</p>
-       <p class="hint" style="margin-bottom:10px">Imagens reais com licença livre (Wikimedia Commons). Toque pra abrir a fonte e o crédito.</p>
+       <p class="hint mb-2">Imagens reais com licença livre (Wikimedia Commons). Toque pra abrir a fonte e o crédito.</p>
        <div class="fotos-grid" id="fotos-grid" data-tid="${t.id}"><p class="hint">Carregando fotos…</p></div>
 
        <div class="spacer"></div>
        <p class="section-title">Suas referências</p>
-       <p class="hint" style="margin-bottom:12px">Salve prints de filmes, YouTubers e Instagram que encaixam nessa técnica.</p>
+       <p class="hint mb-2">Salve prints de filmes, YouTubers e Instagram que encaixam nessa técnica.</p>
        ${galeria}
      </div>` +
     bottomNav("acervo");
@@ -745,7 +1233,7 @@ function viewGuia() {
   app.innerHTML =
     topbar("Como decodificar", { back: "go-acervo" }) +
     `<div class="content">
-       <p class="prose" style="margin-top:4px">Pause qualquer cena de filme, série ou vídeo e responda 5 perguntas. As respostas viram o insight visual da sua cena.</p>
+       <p class="prose mt-1">Pause qualquer cena de filme, série ou vídeo e responda 5 perguntas. As respostas viram o insight visual da sua cena.</p>
 
        <p class="section-title">As 5 perguntas</p>
        <div class="list" style="margin-bottom:24px">
@@ -791,22 +1279,51 @@ function viewGravacao(rid) {
   app.innerHTML =
     topbar("Checklist", { back: "go-roteiro:" + rid }) +
     `<div class="content">
-       <div class="prog"><span>${gravadas} de ${r.cenas.length} gravadas</span></div>
+       <div class="prog"><span><strong>${gravadas}</strong> de ${r.cenas.length} gravadas</span></div>
+       ${progbar(gravadas, r.cenas.length)}
        <div class="check-list">${itens}</div>
      </div>` +
     bottomNav("roteiros");
 }
 
 /* ---------------- Configurações / backup ---------------- */
+function cloudBlock() {
+  const C = window.Cloud;
+  if (!C || !C.isConfigured()) {
+    return `<p class="section-title">Conta (nuvem)</p>
+       <div class="card">
+         <div>Sincronização ainda não configurada.</div>
+         <div style="color:var(--text-3);font-size:13px;margin-top:4px">Preencha <code>firebase-config.js</code> pra ativar o login e sincronizar seus roteiros entre aparelhos.</div>
+       </div>`;
+  }
+  const u = C.getUser && C.getUser();
+  if (u) {
+    return `<p class="section-title">Conta (nuvem)</p>
+       <div class="card" style="display:flex;align-items:center;gap:12px">
+         <i class="ti ti-cloud-check" style="font-size:26px;color:var(--ok)"></i>
+         <div style="flex:1;min-width:0">
+           <div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.displayName || u.email || "Conectado")}</div>
+           <div style="color:var(--text-3);font-size:12px">Seus roteiros sincronizam automaticamente</div>
+         </div>
+       </div>
+       <button class="btn btn-outline mt-2" data-act="cloud-signout"><i class="ti ti-logout"></i> Sair</button>`;
+  }
+  return `<p class="section-title">Conta (nuvem)</p>
+     <p class="hint mb-2">Entre pra salvar seus roteiros na nuvem e acessar de qualquer aparelho.</p>
+     <button class="btn btn-primary" data-act="cloud-signin"><i class="ti ti-brand-google"></i> Entrar com Google</button>`;
+}
+
 function viewConfig() {
   const roteiros = store.getRoteiros();
   const nCenas = roteiros.reduce((s, r) => s + r.cenas.length, 0);
   app.innerHTML =
     topbar("Configurações", { back: "go-home" }) +
     `<div class="content">
+       ${cloudBlock()}
+       <div class="spacer"></div>
        <p class="section-title">Backup dos seus dados</p>
-       <p class="hint" style="margin-bottom:12px">Seus roteiros e fotos ficam só neste aparelho. Exporte de vez em quando pra não perder nada ao limpar o navegador ou trocar de celular.</p>
-       <div class="btn-row" style="margin-bottom:8px">
+       <p class="hint mb-2">Seus roteiros e fotos ficam só neste aparelho. Exporte de vez em quando pra não perder nada ao limpar o navegador ou trocar de celular.</p>
+       <div class="btn-row mb-1">
          <button class="btn btn-primary" data-act="exportar"><i class="ti ti-download"></i> Exportar</button>
          <button class="btn btn-outline" data-act="importar"><i class="ti ti-upload"></i> Importar</button>
        </div>
@@ -819,7 +1336,7 @@ function viewConfig() {
          <div style="color:var(--text-3);font-size:13px;margin-top:4px">Diretor · acervo com ${window.TECNICAS.length} técnicas</div>
        </div>
      </div>` +
-    bottomNav("roteiros");
+    bottomNav("config");
 }
 
 async function exportarDados() {
@@ -845,6 +1362,7 @@ async function exportarDados() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 3000);
+  toast("Backup exportado", { icon: "ti-download" });
 }
 
 function pickBackup(cb) {
@@ -861,12 +1379,16 @@ function pickBackup(cb) {
 async function importarDados(file) {
   let data;
   try { data = JSON.parse(await file.text()); }
-  catch (e) { alert("Arquivo inválido."); return; }
+  catch (e) { return alertDialog({ title: "Arquivo inválido", message: "Não consegui ler esse arquivo." }); }
   if (!data || data.app !== "diretor" || !Array.isArray(data.roteiros)) {
-    alert("Esse arquivo não é um backup do Diretor.");
-    return;
+    return alertDialog({ title: "Backup inválido", message: "Esse arquivo não é um backup do Diretor." });
   }
-  if (!confirm("Isso vai SUBSTITUIR seus roteiros e fotos atuais pelo backup. Continuar?")) return;
+  const ok = await confirmDialog({
+    title: "Restaurar backup",
+    message: "Isso vai substituir seus roteiros e fotos atuais pelo conteúdo do backup. Continuar?",
+    confirm: "Substituir", danger: true
+  });
+  if (!ok) return;
 
   const imagens = data.imagens || {};
   for (const id of Object.keys(imagens)) {
@@ -875,7 +1397,7 @@ async function importarDados(file) {
   }
   store.saveRoteiros(data.roteiros);
   store.saveTecImgs(data.tecImgs || {});
-  alert("Backup restaurado com sucesso!");
+  toast("Backup restaurado", { icon: "ti-circle-check" });
   go("#/");
 }
 
@@ -916,9 +1438,96 @@ function hydrateImgs() {
   });
 }
 
+/* ---------------- Reordenar cenas (arrastar) ----------------
+   Desktop (mouse): arrasta qualquer parte do card (drag começa após
+   mover ~6px; clique sem mover abre a cena).
+   Toque: arrasta pela alça (touch-action:none evita rolar a página).
+   ------------------------------------------------------------ */
+let suppressCenaClick = false;
+function initReorder(listEl, rid) {
+  if (!listEl) return;
+  let card = null, pid = null, active = false, sx = 0, sy = 0;
+  const THRESH = 6;
+
+  const reordenarDom = (y) => {
+    const irmaos = [...listEl.querySelectorAll(".cena:not(.dragging)")];
+    let ref = null;
+    for (const s of irmaos) {
+      const box = s.getBoundingClientRect();
+      if (y < box.top + box.height / 2) { ref = s; break; }
+    }
+    if (ref) listEl.insertBefore(card, ref);
+    else listEl.appendChild(card);
+  };
+
+  const ativar = () => {
+    active = true;
+    card.classList.add("dragging");
+    listEl.classList.add("reordering");
+  };
+
+  const onMove = (e) => {
+    if (!card) return;
+    if (!active) {
+      if (Math.abs(e.clientY - sy) > THRESH || Math.abs(e.clientX - sx) > THRESH) ativar();
+      else return;
+    }
+    e.preventDefault();
+    reordenarDom(e.clientY);
+  };
+
+  const onUp = () => {
+    if (!card) return;
+    const c = card, foiArrasto = active;
+    try { c.releasePointerCapture(pid); } catch (e) {}
+    c.removeEventListener("pointermove", onMove);
+    c.removeEventListener("pointerup", onUp);
+    c.removeEventListener("pointercancel", onUp);
+    card = null; active = false;
+    if (foiArrasto) {
+      c.classList.remove("dragging");
+      listEl.classList.remove("reordering");
+      const ordem = [...listEl.querySelectorAll(".cena")].map((el) => el.getAttribute("data-cid"));
+      const all = store.getRoteiros();
+      const rr = all.find((x) => x.id === rid);
+      if (rr) {
+        rr.cenas.sort((a, b) => ordem.indexOf(a.id) - ordem.indexOf(b.id));
+        rr.atualizadoEm = Date.now();
+        store.saveRoteiros(all);
+      }
+      suppressCenaClick = true;
+      setTimeout(() => { suppressCenaClick = false; }, 320);
+      toast("Ordem atualizada", { icon: "ti-arrows-sort" });
+      render();
+    }
+  };
+
+  listEl.addEventListener("pointerdown", (e) => {
+    const alvoCard = e.target.closest(".cena");
+    if (!alvoCard) return;
+    const naAlca = !!e.target.closest(".drag-handle");
+    // No toque, só a alça inicia o arrasto (pra não brigar com a rolagem).
+    if (!naAlca && e.pointerType !== "mouse") return;
+    card = alvoCard; pid = e.pointerId; active = false;
+    sx = e.clientX; sy = e.clientY;
+    if (naAlca) { ativar(); e.preventDefault(); }
+    try { card.setPointerCapture(pid); } catch (err) {}
+    card.addEventListener("pointermove", onMove);
+    card.addEventListener("pointerup", onUp);
+    card.addEventListener("pointercancel", onUp);
+  });
+}
+
 /* ---------------- Render principal ---------------- */
+let lastRoute = null;
 function render() {
   clearUrls();
+  // Anima a entrada só quando a rota muda (não em re-renders de clique).
+  const route = location.hash || "#/";
+  const mudouRota = route !== lastRoute;
+  lastRoute = route;
+  app.classList.toggle("anim", mudouRota);
+  if (mudouRota) window.scrollTo(0, 0);
   const parts = parseHash();
   const [a, b, c] = parts;
   if (!a) return viewHome();
@@ -934,6 +1543,8 @@ function render() {
 
 /* ---------------- Ações (delegação de clique) ---------------- */
 document.addEventListener("click", async (e) => {
+  // Toque/clique na alça de arrastar não navega.
+  if (e.target.closest(".drag-handle")) return;
   const el = e.target.closest("[data-act]");
   if (!el) return;
   const act = el.getAttribute("data-act");
@@ -945,10 +1556,14 @@ document.addEventListener("click", async (e) => {
   if (act.startsWith("go-roteiro:")) return go("#/roteiro/" + act.split(":")[1]);
 
   if (act === "open-roteiro") return go("#/roteiro/" + d.id);
-  if (act === "open-cena") return go("#/cena/" + d.rid + "/" + d.cid);
+  if (act === "open-cena") { if (suppressCenaClick) return; return go("#/cena/" + d.rid + "/" + d.cid); }
   if (act === "ver-tecnica") return go("#/tecnica/" + d.tid);
   if (act === "abrir-guia") return go("#/guia");
   if (act === "abrir-config") return go("#/config");
+
+  // Nuvem (login Google)
+  if (act === "cloud-signin") { if (window.Cloud) window.Cloud.signIn(); return; }
+  if (act === "cloud-signout") { if (window.Cloud) window.Cloud.signOut(); return; }
 
   // Checklist de gravação
   if (act === "modo-gravacao") return go("#/gravacao/" + d.id);
@@ -989,6 +1604,31 @@ document.addEventListener("click", async (e) => {
       local: "", horario: "", equipamento: "", gravada: false
     }));
     updateRoteiro(d.id, { cenas: r.cenas.concat(novas) });
+    toast(plural(novas.length, "cena adicionada", "cenas adicionadas"), { icon: "ti-movie" });
+    return render();
+  }
+
+  // Modo Livre: elementos, fundo e luz
+  if (act === "comp-add-el") {
+    compSel = addElemento(d.rid, d.cid, d.tipo);
+    toast(PAL_LABEL[d.tipo] + " adicionado", { icon: PAL_ICON[d.tipo] });
+    return render();
+  }
+  if (act === "comp-del-el") {
+    if (compSel) removeElemento(d.rid, d.cid, compSel);
+    compSel = null;
+    return render();
+  }
+  if (act === "comp-bg") { setCompBg(d.rid, d.cid, d.bg); return render(); }
+  if (act === "comp-luz-add") { updateCena(d.rid, d.cid, { luz: Object.assign({}, LUZ_DEFAULT) }); return render(); }
+  if (act === "comp-luz-rm") { updateCena(d.rid, d.cid, { luz: null }); return render(); }
+  if (act === "comp-luz-cor") {
+    updateCena(d.rid, d.cid, { luz: Object.assign({}, cenaLuz(d.rid, d.cid), { cor: d.cor }) });
+    return render();
+  }
+  if (act === "comp-luz-contra") {
+    const cur = cenaLuz(d.rid, d.cid);
+    updateCena(d.rid, d.cid, { luz: Object.assign({}, cur, { contra: !cur.contra }) });
     return render();
   }
 
@@ -1022,28 +1662,59 @@ document.addEventListener("click", async (e) => {
 
   // Novo roteiro
   if (act === "novo-roteiro") {
-    const nome = (prompt("Nome do roteiro:") || "").trim();
+    const nome = await promptDialog({ title: "Novo roteiro", label: "Nome do roteiro", placeholder: "Ex: Vlog da viagem", confirm: "Criar" });
     if (!nome) return;
     const all = store.getRoteiros();
     const novo = { id: uid("rot"), nome, criadoEm: Date.now(), atualizadoEm: Date.now(), cenas: [] };
     all.push(novo);
     store.saveRoteiros(all);
+    toast("Roteiro criado", { icon: "ti-clapperboard" });
     return go("#/roteiro/" + novo.id);
   }
 
-  // Menu do roteiro (renomear / excluir)
+  // Menu do roteiro (renomear / duplicar / excluir)
   if (act === "roteiro-menu") {
     const all = store.getRoteiros();
     const r = all.find((x) => x.id === d.id);
     if (!r) return;
-    const opc = (prompt(`"${r.nome}"\n\nDigite:\n1 = Renomear\n2 = Excluir roteiro`, "") || "").trim();
-    if (opc === "1") {
-      const novo = (prompt("Novo nome:", r.nome) || "").trim();
-      if (novo) { r.nome = novo; r.atualizadoEm = Date.now(); store.saveRoteiros(all); render(); }
-    } else if (opc === "2") {
-      if (confirm(`Excluir o roteiro "${r.nome}" e todas as cenas?`)) {
+    const escolha = await actionSheet({
+      title: r.nome,
+      actions: [
+        { id: "rename", label: "Renomear", icon: "ti-pencil" },
+        { id: "dup", label: "Duplicar", icon: "ti-copy" },
+        { id: "del", label: "Excluir roteiro", icon: "ti-trash", danger: true }
+      ]
+    });
+    if (escolha === "rename") {
+      const novo = await promptDialog({ title: "Renomear roteiro", label: "Novo nome", value: r.nome, confirm: "Salvar" });
+      if (novo) { r.nome = novo; r.atualizadoEm = Date.now(); store.saveRoteiros(all); toast("Renomeado"); render(); }
+    } else if (escolha === "dup") {
+      const copia = JSON.parse(JSON.stringify(r));
+      copia.id = uid("rot");
+      copia.nome = r.nome + " (cópia)";
+      copia.criadoEm = copia.atualizadoEm = Date.now();
+      // Clona os blobs das fotos pra não compartilhar imagem entre os dois roteiros.
+      for (const cena of copia.cenas) {
+        cena.id = uid("cen");
+        if (cena.imagemId) {
+          const blob = await idbGet(cena.imagemId);
+          cena.imagemId = blob ? await idbPut(blob) : null;
+        }
+      }
+      all.push(copia);
+      store.saveRoteiros(all);
+      toast("Roteiro duplicado", { icon: "ti-copy" });
+      render();
+    } else if (escolha === "del") {
+      const ok = await confirmDialog({
+        title: "Excluir roteiro",
+        message: `Excluir "${r.nome}" e todas as cenas? Isso não pode ser desfeito.`,
+        confirm: "Excluir", danger: true
+      });
+      if (ok) {
         for (const cena of r.cenas) if (cena.imagemId) await idbDel(cena.imagemId);
         store.saveRoteiros(all.filter((x) => x.id !== r.id));
+        toast("Roteiro excluído", { icon: "ti-trash" });
         return go("#/");
       }
     }
@@ -1068,11 +1739,13 @@ document.addEventListener("click", async (e) => {
     const r = all.find((x) => x.id === d.rid);
     const cena = r && r.cenas.find((x) => x.id === d.cid);
     if (!cena) return;
-    if (!confirm("Excluir esta cena?")) return;
+    const ok = await confirmDialog({ title: "Excluir cena", message: "Esta cena será removida do roteiro.", confirm: "Excluir", danger: true });
+    if (!ok) return;
     if (cena.imagemId) await idbDel(cena.imagemId);
     r.cenas = r.cenas.filter((x) => x.id !== d.cid);
     r.atualizadoEm = Date.now();
     store.saveRoteiros(all);
+    toast("Cena excluída", { icon: "ti-trash" });
     return go("#/roteiro/" + d.rid);
   }
 
@@ -1106,6 +1779,7 @@ document.addEventListener("click", async (e) => {
       cena.imagemId = imgId;
       r.atualizadoEm = Date.now();
       store.saveRoteiros(all);
+      toast("Foto adicionada", { icon: "ti-camera" });
       render();
     });
   }
@@ -1130,7 +1804,8 @@ document.addEventListener("click", async (e) => {
     });
   }
   if (act === "del-tec-img") {
-    if (!confirm("Remover esta referência?")) return;
+    const ok = await confirmDialog({ title: "Remover referência", message: "Remover esta imagem de referência?", confirm: "Remover", danger: true });
+    if (!ok) return;
     await idbDel(d.iid);
     const m = store.getTecImgs();
     m[d.tid] = (m[d.tid] || []).filter((x) => x !== d.iid);

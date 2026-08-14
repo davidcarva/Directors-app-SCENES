@@ -10,3 +10,8 @@ desktop.ini
 
 # Logs
 *.log
+
+# Build binário e configs locais (não vão pro repo)
+*.apk
+.vercel/
+.claude/settings.local.json

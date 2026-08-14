@@ -56,7 +56,17 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log("Diretor rodando em:");
   console.log("  Neste PC:   http://localhost:" + PORT);
   console.log("  No celular: http://SEU-IP:" + PORT + "  (mesma Wi-Fi)");
-  console.log("\nFeche esta janela ou rode fechar-servidor.bat para parar.");
+  console.log("\nFeche esta janela para parar o servidor.");
+
+  // Abre o app no navegador padrão (best-effort). Usa explorer.exe, que é
+  // assinado — não dispara o Controle de Aplicativo Inteligente do Windows.
+  // Defina DIRETOR_NO_OPEN=1 para não abrir (ex.: uso só pelo celular).
+  if (process.platform === "win32" && !process.env.DIRETOR_NO_OPEN) {
+    try {
+      const cp = require("child_process");
+      cp.spawn("explorer.exe", ["http://localhost:" + PORT], { detached: true, stdio: "ignore" }).unref();
+    } catch (e) {}
+  }
 });
 
 server.on("error", (e) => {

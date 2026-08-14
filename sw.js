@@ -1,4 +1,4 @@
-const CACHE = "diretor-v10";
+const CACHE = "diretor-v20";
 const ASSETS = [
   "./",
   "./index.html",
@@ -6,6 +6,8 @@ const ASSETS = [
   "./data.js",
   "./diagrams.js",
   "./app.js",
+  "./firebase-config.js",
+  "./cloud.js",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-maskable.svg",

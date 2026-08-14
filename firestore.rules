@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// Cada usuário só lê/escreve os PRÓPRIOS dados.
+// Console do Firebase → Firestore Database → aba "Regras" → cole isto → Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid}/roteiros/{roteiroId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // fecha o resto por padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
