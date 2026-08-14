@@ -718,11 +718,26 @@ function abrirRoteiroIA() {
       if (!resp.ok) throw new Error(data.erro || ("Erro " + resp.status));
       const cenasIA = Array.isArray(data.cenas) ? data.cenas : [];
       if (!cenasIA.length) throw new Error("A IA não retornou cenas.");
+      // A IA às vezes devolve o NOME ("Clímax") em vez do id ("climax").
+      // Casa por id ou nome, ignorando acento/caixa.
+      const norm = (s) => String(s == null ? "" : s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+      const acharFuncao = (v) => {
+        const n = norm(v);
+        if (!n || n === "null") return null;
+        const f = (window.FUNCOES || []).find((x) => norm(x.id) === n || norm(x.nome) === n);
+        return f ? f.id : null;
+      };
+      const acharTecnica = (v) => {
+        const n = norm(v);
+        if (!n || n === "null") return null;
+        const t = (window.TECNICAS || []).find((x) => norm(x.id) === n || norm(x.nome) === n);
+        return t ? t.id : null;
+      };
       const cenas = cenasIA.map((c) => ({
         id: uid("cen"),
         descricao: String(c.descricao || "").trim(),
-        tecnicaId: tecnica(c.tecnicaId) ? c.tecnicaId : null,
-        funcao: (window.FUNCOES || []).some((f) => f.id === c.funcao) ? c.funcao : null,
+        tecnicaId: acharTecnica(c.tecnicaId),
+        funcao: acharFuncao(c.funcao),
         emocao: null, imagemId: null, comp: null, luz: null,
         dica: "", local: "", horario: "", equipamento: "", gravada: false
       }));

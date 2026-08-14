@@ -36,8 +36,8 @@ Responda SOMENTE com JSON válido neste formato exato:
 {"nome":"título curto do vídeo","mensagem":"a ideia central em 1 frase","cenas":[{"descricao":"o que acontece/aparece + a fala ou legenda dessa cena; concreto e gravável, 1-2 frases","funcao":"<id>","tecnicaId":"<id ou null>"}]}
 Regras rígidas:
 - Exatamente ${nCenas} cenas, na ordem da narrativa (começa com gancho, termina com fecho/CTA).
-- "funcao" DEVE ser um destes ids: ${funcList}.
-- "tecnicaId" DEVE ser um destes ids, ou null se nenhuma encaixar: ${tecList}.
+- "funcao" DEVE ser o ID (o texto ANTES do "="), nunca o nome. Ids válidos: ${funcList}.
+- "tecnicaId" DEVE ser o ID (texto antes do "="), ou null de verdade (não a string "null"), se nenhuma encaixar. Ids válidos: ${tecList}.
 - Descrições concretas do que filmar (evite abstração). Nada de texto fora do JSON.
 ${estilo ? "- Estilo/tom desejado: " + estilo : ""}`;
 
