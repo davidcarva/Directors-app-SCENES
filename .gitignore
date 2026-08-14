@@ -15,3 +15,6 @@ desktop.ini
 *.apk
 .vercel/
 .claude/settings.local.json
+
+# servidor local (não vai pro repo/deploy)
+server.js
