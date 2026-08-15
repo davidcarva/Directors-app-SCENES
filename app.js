@@ -23,7 +23,11 @@ async function idbPut(blob) {
   return new Promise((res, rej) => {
     const tx = db.transaction("imgs", "readwrite");
     tx.objectStore("imgs").put({ id, blob });
-    tx.oncomplete = () => res(id);
+    tx.oncomplete = () => {
+      // Espelha na nuvem (se logado); se falhar, fica só local.
+      if (window.Cloud && window.Cloud.uploadImage) window.Cloud.uploadImage(id, blob);
+      res(id);
+    };
     tx.onerror = () => rej(tx.error);
   });
 }
@@ -71,7 +75,10 @@ const store = {
     try { return JSON.parse(localStorage.getItem("tecImgs") || "{}"); }
     catch { return {}; }
   },
-  saveTecImgs(m) { localStorage.setItem("tecImgs", JSON.stringify(m)); }
+  saveTecImgs(m) {
+    localStorage.setItem("tecImgs", JSON.stringify(m));
+    if (window.Cloud && window.Cloud.notifyTecImgs) window.Cloud.notifyTecImgs(m);
+  }
 };
 
 function uid(p) { return p + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7); }
@@ -119,12 +126,23 @@ function clearUrls() {
   urlCache.length = 0;
 }
 async function fillImg(el, id) {
+  if (!el) return;
   const blob = await idbGet(id);
-  if (!blob || !el) return;
-  const u = URL.createObjectURL(blob);
-  urlCache.push(u);
-  el.src = u;
+  if (blob) {
+    const u = URL.createObjectURL(blob);
+    urlCache.push(u);
+    el.src = u;
+    return;
+  }
+  // Não está neste aparelho: busca na nuvem (imagem de outra máquina).
+  if (window.Cloud && window.Cloud.imageUrl) {
+    const url = await window.Cloud.imageUrl(id);
+    if (url) el.src = url;
+  }
 }
+
+// Usado pelo cloud.js pra subir imagens já existentes no aparelho.
+window.idbGetBlob = idbGet;
 
 /* ---------------- Helpers de domínio ---------------- */
 function getRoteiro(id) { return store.getRoteiros().find((r) => r.id === id); }
@@ -1419,7 +1437,7 @@ function cloudBlock() {
          <i class="ti ti-cloud-check" style="font-size:26px;color:var(--ok)"></i>
          <div style="flex:1;min-width:0">
            <div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.displayName || u.email || "Conectado")}</div>
-           <div style="color:var(--text-3);font-size:12px">Seus roteiros sincronizam automaticamente</div>
+           <div style="color:var(--text-3);font-size:12px">Roteiros e fotos sincronizam automaticamente</div>
          </div>
        </div>
        <button class="btn btn-outline mt-2" data-act="cloud-signout"><i class="ti ti-logout"></i> Sair</button>`;

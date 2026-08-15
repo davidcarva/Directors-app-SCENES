@@ -14,7 +14,7 @@
   const cfg = window.FIREBASE_CONFIG || {};
   const configured = !!(cfg && cfg.apiKey);
 
-  let auth = null, db = null, provider = null, user = null;
+  let auth = null, db = null, provider = null, user = null, storage = null;
   const fns = {};
   let ready = false;
   let pushTimer = null;
@@ -34,8 +34,27 @@
     },
     async signOut() { if (ready) { try { await fns.signOut(auth); } catch (e) {} } },
     notifyLocalChange(roteiros) { scheduleFlush(roteiros); },
-    syncNow() { if (user) pullAndMerge(); }
+    syncNow() { if (user) pullAndMerge(); },
+
+    // ---- Imagens (Firebase Storage) ----
+    // Sobe o blob; silencioso se offline/deslogado (fica só local).
+    async uploadImage(id, blob) {
+      if (!ready || !user || !storage || !blob) return false;
+      try {
+        await fns.uploadBytes(fns.sref(storage, imgPath(user.uid, id)), blob);
+        return true;
+      } catch (e) { console.warn("[Cloud] upload img", id, e && e.code); return false; }
+    },
+    // URL pra usar direto em <img src> (não precisa de CORS).
+    async imageUrl(id) {
+      if (!ready || !user || !storage) return null;
+      try { return await fns.getDownloadURL(fns.sref(storage, imgPath(user.uid, id))); }
+      catch (e) { return null; }
+    },
+    notifyTecImgs(map) { saveTecImgs(map); }
   };
+
+  function imgPath(uid, id) { return "users/" + uid + "/imgs/" + id; }
 
   if (!configured) {
     console.info("[Cloud] Firebase não configurado — rodando 100% local. Preencha firebase-config.js pra ligar login/sync.");
@@ -46,10 +65,11 @@
 
   async function init() {
     try {
-      const [appMod, authMod, fsMod] = await Promise.all([
+      const [appMod, authMod, fsMod, stMod] = await Promise.all([
         import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-app.js`),
         import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-auth.js`),
-        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-firestore.js`)
+        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-firestore.js`),
+        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-storage.js`)
       ]);
 
       const app = appMod.initializeApp(cfg);
@@ -67,9 +87,15 @@
       }
       fns.collection = fsMod.collection;
       fns.doc = fsMod.doc;
+      fns.getDoc = fsMod.getDoc;
       fns.getDocs = fsMod.getDocs;
       fns.setDoc = fsMod.setDoc;
       fns.deleteDoc = fsMod.deleteDoc;
+
+      storage = stMod.getStorage(app);
+      fns.sref = stMod.ref;
+      fns.uploadBytes = stMod.uploadBytes;
+      fns.getDownloadURL = stMod.getDownloadURL;
 
       ready = true;
       authMod.onAuthStateChanged(auth, async (u) => {
@@ -107,9 +133,55 @@
     });
     const merged = [...byId.values()];
     writeLocal(merged);
+    await pullTecImgs();
     emit("cloud-synced", { count: merged.length });
     pushAll(merged); // garante que o que é mais novo local suba
+    backfillImagens(merged); // sobe imagens locais que ainda não estão na nuvem
   }
+
+  // ---- Mapa de referências das técnicas (users/{uid}/meta/tecImgs) ----
+  function tecImgsRef() { return fns.doc(db, "users", user.uid, "meta", "tecImgs"); }
+  async function pullTecImgs() {
+    if (!ready || !user) return;
+    try {
+      const snap = await fns.getDoc(tecImgsRef());
+      const remoto = snap.exists() ? (snap.data().map || {}) : {};
+      let local = {};
+      try { local = JSON.parse(localStorage.getItem("tecImgs") || "{}"); } catch {}
+      // união por técnica (sem perder referência de nenhum aparelho)
+      const merged = Object.assign({}, remoto);
+      Object.keys(local).forEach((tid) => {
+        merged[tid] = [...new Set([...(remoto[tid] || []), ...(local[tid] || [])])];
+      });
+      localStorage.setItem("tecImgs", JSON.stringify(merged));
+      await fns.setDoc(tecImgsRef(), { map: merged });
+    } catch (e) { console.warn("[Cloud] tecImgs", e && e.code); }
+  }
+  async function saveTecImgs(map) {
+    if (!ready || !user) return;
+    try { await fns.setDoc(tecImgsRef(), { map: map || {} }); } catch (e) {}
+  }
+
+  // Sobe pro Storage as imagens referenciadas que ainda não subiram.
+  async function backfillImagens(roteiros) {
+    if (!ready || !user || !storage) return;
+    const ids = new Set();
+    (roteiros || []).forEach((r) => (r.cenas || []).forEach((c) => { if (c.imagemId) ids.add(c.imagemId); }));
+    try {
+      const m = JSON.parse(localStorage.getItem("tecImgs") || "{}");
+      Object.values(m).forEach((arr) => (arr || []).forEach((id) => ids.add(id)));
+    } catch {}
+    for (const id of ids) {
+      if (imgsSubidas.has(id)) continue;
+      try {
+        const blob = await window.idbGetBlob(id);   // exposto pelo app.js
+        if (!blob) continue;                         // não temos local (veio de outro aparelho)
+        await fns.uploadBytes(fns.sref(storage, imgPath(user.uid, id)), blob);
+        imgsSubidas.add(id);
+      } catch (e) { /* segue o baile */ }
+    }
+  }
+  const imgsSubidas = new Set();
 
   function scheduleFlush(roteiros) {
     if (!ready || !user) { lastSnapshot = JSON.stringify(roteiros); return; }
