@@ -1,4 +1,4 @@
-const CACHE = "diretor-v25";
+const CACHE = "diretor-v26";
 const ASSETS = [
   "./",
   "./index.html",

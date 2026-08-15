@@ -14,7 +14,7 @@
   const cfg = window.FIREBASE_CONFIG || {};
   const configured = !!(cfg && cfg.apiKey);
 
-  let auth = null, db = null, provider = null, user = null, storage = null;
+  let auth = null, db = null, provider = null, user = null;
   const fns = {};
   let ready = false;
   let pushTimer = null;
@@ -36,25 +36,61 @@
     notifyLocalChange(roteiros) { scheduleFlush(roteiros); },
     syncNow() { if (user) pullAndMerge(); },
 
-    // ---- Imagens (Firebase Storage) ----
-    // Sobe o blob; silencioso se offline/deslogado (fica só local).
+    // ---- Imagens (guardadas no Firestore como dataURL) ----
+    // O Cloud Storage exige plano pago, então usamos o Firestore:
+    // 1 doc por imagem em users/{uid}/imgs/{id}, limite ~1MB por doc.
     async uploadImage(id, blob) {
-      if (!ready || !user || !storage || !blob) return false;
+      if (!ready || !user || !blob) return false;
       try {
-        await fns.uploadBytes(fns.sref(storage, imgPath(user.uid, id)), blob);
+        const dataUrl = await comprimirParaNuvem(blob);
+        if (!dataUrl) return false;
+        await fns.setDoc(imgDoc(id), { data: dataUrl, em: Date.now() });
+        imgsSubidas.add(id);
         return true;
       } catch (e) { console.warn("[Cloud] upload img", id, e && e.code); return false; }
     },
-    // URL pra usar direto em <img src> (não precisa de CORS).
+    // Devolve uma dataURL — serve direto em <img src>.
     async imageUrl(id) {
-      if (!ready || !user || !storage) return null;
-      try { return await fns.getDownloadURL(fns.sref(storage, imgPath(user.uid, id))); }
-      catch (e) { return null; }
+      if (!ready || !user) return null;
+      try {
+        const snap = await fns.getDoc(imgDoc(id));
+        return snap.exists() ? (snap.data().data || null) : null;
+      } catch (e) { return null; }
     },
     notifyTecImgs(map) { saveTecImgs(map); }
   };
 
-  function imgPath(uid, id) { return "users/" + uid + "/imgs/" + id; }
+  function imgDoc(id) { return fns.doc(db, "users", user.uid, "imgs", id); }
+
+  // Reduz a imagem até caber com folga no limite de 1MB do documento.
+  async function comprimirParaNuvem(blob) {
+    const LIMITE = 700 * 1024; // ~700KB de dataURL (base64 infla ~33%)
+    const tentativas = [[1100, 0.72], [900, 0.65], [700, 0.55], [520, 0.45]];
+    for (const [maxLado, q] of tentativas) {
+      const url = await redimensionar(blob, maxLado, q);
+      if (url && url.length <= LIMITE) return url;
+    }
+    console.warn("[Cloud] imagem muito grande pra sincronizar — fica só neste aparelho.");
+    return null;
+  }
+  function redimensionar(blob, maxLado, q) {
+    return new Promise((res) => {
+      const img = new Image();
+      const src = URL.createObjectURL(blob);
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > h && w > maxLado) { h = Math.round((h * maxLado) / w); w = maxLado; }
+        else if (h >= w && h > maxLado) { w = Math.round((w * maxLado) / h); h = maxLado; }
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(src);
+        try { res(c.toDataURL("image/jpeg", q)); } catch (e) { res(null); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(src); res(null); };
+      img.src = src;
+    });
+  }
 
   if (!configured) {
     console.info("[Cloud] Firebase não configurado — rodando 100% local. Preencha firebase-config.js pra ligar login/sync.");
@@ -65,11 +101,10 @@
 
   async function init() {
     try {
-      const [appMod, authMod, fsMod, stMod] = await Promise.all([
+      const [appMod, authMod, fsMod] = await Promise.all([
         import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-app.js`),
         import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-auth.js`),
-        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-firestore.js`),
-        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-storage.js`)
+        import(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-firestore.js`)
       ]);
 
       const app = appMod.initializeApp(cfg);
@@ -92,10 +127,6 @@
       fns.setDoc = fsMod.setDoc;
       fns.deleteDoc = fsMod.deleteDoc;
 
-      storage = stMod.getStorage(app);
-      fns.sref = stMod.ref;
-      fns.uploadBytes = stMod.uploadBytes;
-      fns.getDownloadURL = stMod.getDownloadURL;
 
       ready = true;
       authMod.onAuthStateChanged(auth, async (u) => {
@@ -162,9 +193,9 @@
     try { await fns.setDoc(tecImgsRef(), { map: map || {} }); } catch (e) {}
   }
 
-  // Sobe pro Storage as imagens referenciadas que ainda não subiram.
+  // Sobe as imagens referenciadas que ainda não estão na nuvem.
   async function backfillImagens(roteiros) {
-    if (!ready || !user || !storage) return;
+    if (!ready || !user) return;
     const ids = new Set();
     (roteiros || []).forEach((r) => (r.cenas || []).forEach((c) => { if (c.imagemId) ids.add(c.imagemId); }));
     try {
@@ -176,8 +207,9 @@
       try {
         const blob = await window.idbGetBlob(id);   // exposto pelo app.js
         if (!blob) continue;                         // não temos local (veio de outro aparelho)
-        await fns.uploadBytes(fns.sref(storage, imgPath(user.uid, id)), blob);
-        imgsSubidas.add(id);
+        const jaTem = await fns.getDoc(imgDoc(id));
+        if (jaTem.exists()) { imgsSubidas.add(id); continue; }
+        await window.Cloud.uploadImage(id, blob);
       } catch (e) { /* segue o baile */ }
     }
   }
