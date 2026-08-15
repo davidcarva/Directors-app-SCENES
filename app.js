@@ -675,17 +675,22 @@ function toast(msg, opts) {
    Chama a função serverless /api/gerar-roteiro (chave OpenAI fica lá)
    e cria um roteiro já estruturado em cenas.
    ------------------------------------------------------ */
-function abrirRoteiroIA() {
+function abrirRoteiroIA(modo) {
+  const importar = modo === "importar";
   const ov = mkOverlay(`
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-body">
-        <h2 class="modal-title"><i class="ti ti-sparkles"></i> Novo roteiro com IA</h2>
-        <p class="modal-msg" style="margin-bottom:14px">Descreva a ideia — a IA divide em cenas short-form já com função e técnica sugerida.</p>
-        <span class="label">Sobre o que é o vídeo?</span>
-        <textarea id="ia-tema" rows="3" placeholder="Ex: 3 erros que iniciantes cometem ao editar vídeo"></textarea>
+        <h2 class="modal-title"><i class="ti ${importar ? "ti-file-import" : "ti-sparkles"}"></i> ${importar ? "Importar roteiro" : "Novo roteiro com IA"}</h2>
+        <p class="modal-msg" style="margin-bottom:14px">${importar
+          ? "Cole um roteiro pronto (ex: do Newsletter). A IA divide em cenas filmáveis preservando as suas falas."
+          : "Descreva a ideia — a IA divide em cenas short-form já com função e técnica sugerida."}</p>
+        <span class="label">${importar ? "Texto do roteiro" : "Sobre o que é o vídeo?"}</span>
+        <textarea id="ia-tema" rows="${importar ? 7 : 3}" placeholder="${importar
+          ? "Cole aqui o roteiro inteiro…"
+          : "Ex: 3 erros que iniciantes cometem ao editar vídeo"}"></textarea>
         <div class="ia-row">
           <div class="ia-n"><span class="label">Nº de cenas</span>
-            <input id="ia-ncenas" type="number" min="3" max="10" value="6" inputmode="numeric"></div>
+            <input id="ia-ncenas" type="number" min="3" max="12" value="${importar ? "" : "6"}" placeholder="${importar ? "auto" : ""}" inputmode="numeric"></div>
           <div style="flex:1"><span class="label">Estilo (opcional)</span>
             <input id="ia-estilo" type="text" placeholder="Ex: informal, gancho forte"></div>
         </div>
@@ -693,7 +698,7 @@ function abrirRoteiroIA() {
       </div>
       <div class="modal-actions">
         <button class="btn btn-outline" data-ia="cancel">Cancelar</button>
-        <button class="btn btn-primary" data-ia="go"><i class="ti ti-sparkles"></i> Gerar</button>
+        <button class="btn btn-primary" data-ia="go"><i class="ti ${importar ? "ti-file-import" : "ti-sparkles"}"></i> ${importar ? "Importar" : "Gerar"}</button>
       </div>
     </div>`, "modal-overlay");
 
@@ -712,22 +717,30 @@ function abrirRoteiroIA() {
   });
 
   async function gerar() {
-    const tema = temaEl.value.trim();
-    if (!tema) { msgEl.className = "ia-msg err"; msgEl.textContent = "Escreve a ideia do vídeo primeiro."; temaEl.focus(); return; }
-    const nCenas = Math.max(3, Math.min(10, parseInt(ov.querySelector("#ia-ncenas").value, 10) || 6));
+    const entrada = temaEl.value.trim();
+    if (!entrada) {
+      msgEl.className = "ia-msg err";
+      msgEl.textContent = importar ? "Cole o roteiro primeiro." : "Escreve a ideia do vídeo primeiro.";
+      temaEl.focus(); return;
+    }
+    const nRaw = parseInt(ov.querySelector("#ia-ncenas").value, 10);
+    // No modo importar, campo vazio = auto (a IA decide pelos cortes do texto).
+    const nCenas = isNaN(nRaw) ? (importar ? 0 : 6) : Math.max(3, Math.min(12, nRaw));
     const estilo = ov.querySelector("#ia-estilo").value.trim();
     loading = true;
     goBtn.disabled = true;
-    goBtn.innerHTML = `<i class="ti ti-loader-2 spin"></i> Gerando…`;
+    goBtn.innerHTML = `<i class="ti ti-loader-2 spin"></i> ${importar ? "Importando…" : "Gerando…"}`;
     msgEl.className = "ia-msg info";
-    msgEl.textContent = "A IA está montando suas cenas…";
+    msgEl.textContent = importar ? "A IA está decupando seu roteiro em cenas…" : "A IA está montando suas cenas…";
     try {
       // Caminho COM .js: o builds da Vercel monta a função no path do arquivo.
       const resp = await fetch("/api/gerar-roteiro.js", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tema, nCenas, estilo,
+          tema: importar ? "" : entrada,
+          texto: importar ? entrada : "",
+          nCenas, estilo,
           funcoes: (window.FUNCOES || []).map((f) => ({ id: f.id, nome: f.nome })),
           tecnicas: (window.TECNICAS || []).map((t) => ({ id: t.id, nome: t.nome }))
         })
@@ -761,7 +774,7 @@ function abrirRoteiroIA() {
       }));
       const novo = {
         id: uid("rot"),
-        nome: String(data.nome || tema).slice(0, 80),
+        nome: String(data.nome || (importar ? "Roteiro importado" : entrada)).slice(0, 80),
         mensagem: String(data.mensagem || "").trim(),
         criadoEm: Date.now(), atualizadoEm: Date.now(),
         cenas
@@ -770,12 +783,12 @@ function abrirRoteiroIA() {
       all.push(novo);
       store.saveRoteiros(all);
       done = true; closeOverlay(ov);
-      toast("Roteiro gerado com IA", { icon: "ti-sparkles" });
+      toast(importar ? "Roteiro importado em cenas" : "Roteiro gerado com IA", { icon: importar ? "ti-file-import" : "ti-sparkles" });
       go("#/roteiro/" + novo.id);
     } catch (e) {
       loading = false;
       goBtn.disabled = false;
-      goBtn.innerHTML = `<i class="ti ti-sparkles"></i> Gerar`;
+      goBtn.innerHTML = `<i class="ti ${importar ? "ti-file-import" : "ti-sparkles"}"></i> ${importar ? "Importar" : "Gerar"}`;
       const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
       msgEl.className = "ia-msg err";
       msgEl.textContent = String((e && e.message) || e) + (local ? " — a IA só roda no site publicado (Vercel), não no localhost." : "");
@@ -805,6 +818,7 @@ function viewHome() {
       }).join("")}</div>
       <div class="spacer"></div>
       <button class="btn btn-primary" data-act="novo-roteiro-ia"><i class="ti ti-sparkles"></i> Novo roteiro com IA</button>
+      <button class="btn btn-outline mt-2" data-act="importar-roteiro-ia"><i class="ti ti-file-import"></i> Importar roteiro pronto</button>
       <button class="btn btn-outline mt-2" data-act="novo-roteiro"><i class="ti ti-plus"></i> Novo roteiro em branco</button>`
     : `<div class="onboarding">
          <div class="ob-icon"><i class="ti ti-clapperboard"></i></div>
@@ -816,6 +830,7 @@ function viewHome() {
            <div class="ob-step"><span class="ob-n">3</span> Marque como gravada conforme filma</div>
          </div>
          <button class="btn btn-primary" data-act="novo-roteiro-ia"><i class="ti ti-sparkles"></i> Criar roteiro com IA</button>
+         <button class="btn btn-outline" data-act="importar-roteiro-ia"><i class="ti ti-file-import"></i> Importar roteiro pronto</button>
          <button class="btn btn-outline" data-act="novo-roteiro"><i class="ti ti-plus"></i> Criar em branco</button>
          <button class="btn btn-ghost" data-act="go-acervo"><i class="ti ti-books"></i> Explorar técnicas</button>
        </div>`;
@@ -1696,6 +1711,7 @@ document.addEventListener("click", async (e) => {
   if (act === "abrir-config") return go("#/config");
 
   if (act === "novo-roteiro-ia") return abrirRoteiroIA();
+  if (act === "importar-roteiro-ia") return abrirRoteiroIA("importar");
 
   // Nuvem (login Google)
   if (act === "cloud-signin") { if (window.Cloud) window.Cloud.signIn(); return; }
