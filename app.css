@@ -994,11 +994,17 @@ input[type="range"]::-moz-range-thumb {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 0;
+}
+/* Wrapper centraliza SEM cortar: se o texto for maior que a tela,
+   ele simplesmente rola do começo (o justify-content:center cortava o topo). */
+.foco-inner {
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 20px;
-  padding: 24px 0;
+  gap: 18px;
 }
 /* A fala: grande o bastante pra ler com o celular na mão */
 .foco-fala {
@@ -1007,9 +1013,13 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.45;
   font-weight: 500;
   color: var(--text);
-  text-wrap: balance;
+  text-wrap: pretty;
 }
+/* Texto longo (listas, roteiros densos): diminui pra caber melhor */
+.foco-fala.longo { font-size: clamp(18px, 4.2vw, 24px); line-height: 1.5; }
+.foco-fala.xlongo { font-size: clamp(16px, 3.6vw, 20px); line-height: 1.55; }
 .foco-fala.vazia { color: var(--text-3); font-style: italic; font-size: 20px; }
+.foco-fala strong, .foco-fala b { color: var(--accent); font-weight: 700; }
 .foco-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .foco-chip {
   display: inline-flex; align-items: center; gap: 6px;

@@ -1463,8 +1463,13 @@ function viewFoco(rid, idxStr) {
     c.equipamento ? `<span class="foco-chip"><i class="ti ti-device-camera"></i> ${esc(c.equipamento)}</span>` : ""
   ].filter(Boolean).join("");
 
-  const fala = c.descricao ? esc(c.descricao) : (c.dica ? esc(c.dica) : "(sem texto nesta cena)");
-  const falaCls = c.descricao ? "" : " vazia";
+  const bruto = c.descricao || c.dica || "";
+  // Escapa e só então converte **negrito** e quebras (o texto vem de fora).
+  const fala = bruto
+    ? esc(bruto).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>")
+    : "(sem texto nesta cena)";
+  const n = bruto.length;
+  const falaCls = !bruto ? " vazia" : n > 620 ? " xlongo" : n > 300 ? " longo" : "";
 
   app.innerHTML = `
     <div class="foco">
@@ -1477,8 +1482,10 @@ function viewFoco(rid, idxStr) {
       </div>
 
       <div class="foco-corpo">
-        <p class="foco-fala${falaCls}">${fala}</p>
-        ${extras ? `<div class="foco-chips">${extras}</div>` : ""}
+        <div class="foco-inner">
+          <p class="foco-fala${falaCls}">${fala}</p>
+          ${extras ? `<div class="foco-chips">${extras}</div>` : ""}
+        </div>
       </div>
 
       <div class="foco-acoes">
