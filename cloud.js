@@ -126,18 +126,52 @@
       fns.getDocs = fsMod.getDocs;
       fns.setDoc = fsMod.setDoc;
       fns.deleteDoc = fsMod.deleteDoc;
+      fns.onSnapshot = fsMod.onSnapshot;
 
 
       ready = true;
       authMod.onAuthStateChanged(auth, async (u) => {
         user = u || null;
         emit("cloud-auth", { user });
-        if (user) await pullAndMerge();
+        if (user) { await pullAndMerge(); ouvirAoVivo(); }
+        else if (unsubLive) { unsubLive(); unsubLive = null; }
       });
     } catch (e) {
       console.error("[Cloud] falha ao iniciar Firebase (verifique a config e a versão do SDK):", e);
       emit("cloud-error", { where: "init", e });
     }
+  }
+
+  // Escuta a coleção em tempo real: roteiro criado em outro aparelho (ou
+  // enviado pelo Newsletter) entra na lista sozinho, sem recarregar.
+  let unsubLive = null;
+  function ouvirAoVivo() {
+    if (!ready || !user || unsubLive) return;
+    try {
+      unsubLive = fns.onSnapshot(
+        fns.collection(db, "users", user.uid, "roteiros"),
+        (snap) => {
+          const cloud = [];
+          snap.forEach((d) => cloud.push(d.data()));
+          mesclarDaNuvem(cloud);
+        },
+        (e) => console.warn("[Cloud] listener:", e && e.code)
+      );
+    } catch (e) { console.warn("[Cloud] onSnapshot indisponível:", e); }
+  }
+  // Traz o que é mais novo na nuvem pro local (não apaga nada local aqui).
+  function mesclarDaNuvem(cloud) {
+    const byId = new Map();
+    localRoteiros().forEach((r) => byId.set(r.id, r));
+    let mudou = false;
+    cloud.forEach((r) => {
+      const cur = byId.get(r.id);
+      if (!cur || (r.atualizadoEm || 0) > (cur.atualizadoEm || 0)) { byId.set(r.id, r); mudou = true; }
+    });
+    if (!mudou) return;
+    const merged = [...byId.values()];
+    writeLocal(merged); // atualiza lastSnapshot => o flush não apaga os novos
+    emit("cloud-synced", { count: merged.length });
   }
 
   function localRoteiros() {
