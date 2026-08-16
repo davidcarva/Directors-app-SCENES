@@ -1455,6 +1455,11 @@ function cloudBlock() {
            <div style="color:var(--text-3);font-size:12px">Roteiros e fotos sincronizam automaticamente</div>
          </div>
        </div>
+       <div class="card mt-2">
+         <div style="font-size:12px;color:var(--text-2);margin-bottom:6px">Seu ID de usuário (pra conectar o Newsletter)</div>
+         <code style="word-break:break-all;font-size:12px">${esc(u.uid)}</code>
+         <button class="btn btn-outline mt-2" data-act="copiar-uid" data-uid="${esc(u.uid)}"><i class="ti ti-copy"></i> Copiar ID</button>
+       </div>
        <button class="btn btn-outline mt-2" data-act="cloud-signout"><i class="ti ti-logout"></i> Sair</button>`;
   }
   return `<p class="section-title">Conta (nuvem)</p>
@@ -1716,6 +1721,11 @@ document.addEventListener("click", async (e) => {
   // Nuvem (login Google)
   if (act === "cloud-signin") { if (window.Cloud) window.Cloud.signIn(); return; }
   if (act === "cloud-signout") { if (window.Cloud) window.Cloud.signOut(); return; }
+  if (act === "copiar-uid") {
+    try { await navigator.clipboard.writeText(d.uid); toast("ID copiado", { icon: "ti-copy" }); }
+    catch (e) { toast("Copie manualmente o ID acima", { icon: "ti-alert-circle" }); }
+    return;
+  }
 
   // Checklist de gravação
   if (act === "modo-gravacao") return go("#/gravacao/" + d.id);

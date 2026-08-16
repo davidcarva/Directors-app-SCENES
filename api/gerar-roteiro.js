@@ -23,7 +23,16 @@ module.exports = async function handler(req, res) {
   const estilo = String(body.estilo || "").trim();
   const auto = !body.nCenas; // no modo "texto", 0/ausente = a IA decide pelos beats
   const nCenas = Math.max(3, Math.min(12, parseInt(body.nCenas, 10) || 6));
-  const funcoes = Array.isArray(body.funcoes) ? body.funcoes : [];
+  // Fallback: clientes que não mandam as listas (ex: Newsletter) usam o padrão do app.
+  const FUNCOES_PADRAO = [
+    { id: "gancho", nome: "Gancho" },
+    { id: "desenvolvimento", nome: "Desenvolvimento" },
+    { id: "virada", nome: "Virada" },
+    { id: "climax", nome: "Clímax" },
+    { id: "respiro", nome: "Respiro" },
+    { id: "encerramento", nome: "Encerramento" }
+  ];
+  const funcoes = (Array.isArray(body.funcoes) && body.funcoes.length) ? body.funcoes : FUNCOES_PADRAO;
   const tecnicas = Array.isArray(body.tecnicas) ? body.tecnicas : [];
   if (!tema && !texto) { res.status(400).json({ erro: "Faltou o tema ou o texto do roteiro." }); return; }
 
