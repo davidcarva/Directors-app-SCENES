@@ -43,9 +43,12 @@ module.exports = async function handler(req, res) {
   const funcList = funcoes.map((f) => `${f.id} = ${f.nome}`).join("; ") || "(nenhuma)";
   const tecList = tecnicas.map((t) => `${t.id} = ${t.nome}`).join("; ") || "(nenhuma)";
 
+  const descSchema = simples
+    ? "APENAS a fala deste bloco, copiada do texto original (sem indicação de câmera/cenário)"
+    : "o que acontece/aparece + a fala ou legenda dessa cena; concreto e gravável, 1-2 frases";
   const regrasComuns =
 `Responda SOMENTE com JSON válido neste formato exato:
-{"nome":"título curto do vídeo","mensagem":"a ideia central em 1 frase","cenas":[{"descricao":"o que acontece/aparece + a fala ou legenda dessa cena; concreto e gravável, 1-2 frases","funcao":"<id>","tecnicaId":"<id ou null>"}]}
+{"nome":"título curto do vídeo","mensagem":"a ideia central em 1 frase","cenas":[{"descricao":"${descSchema}","funcao":"<id>","tecnicaId":"<id ou null>"}]}
 Regras rígidas:
 - "funcao" DEVE ser o ID (o texto ANTES do "="), nunca o nome. Ids válidos: ${funcList}.
 ${simples
