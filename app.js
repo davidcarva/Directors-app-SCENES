@@ -1426,13 +1426,69 @@ function viewGravacao(rid) {
   }).join("");
 
   app.innerHTML =
-    topbar("Checklist", { back: "go-roteiro:" + rid }) +
+    topbar("Checklist", {
+      back: "go-roteiro:" + rid,
+      right: `<button class="icon-btn" data-act="modo-foco" data-rid="${rid}" aria-label="Modo gravação"><i class="ti ti-player-play"></i></button>`
+    }) +
     `<div class="content">
        <div class="prog"><span><strong>${gravadas}</strong> de ${r.cenas.length} gravadas</span></div>
        ${progbar(gravadas, r.cenas.length)}
+       <button class="btn btn-primary mb-3" data-act="modo-foco" data-rid="${rid}"><i class="ti ti-player-play"></i> Iniciar modo gravação</button>
        <div class="check-list">${itens}</div>
      </div>` +
     bottomNav("roteiros");
+}
+
+/* ---------------- Modo gravação (tela cheia, 1 cena por vez) ----------------
+   Pra usar com o celular na mão: a fala em letra grande, o essencial embaixo
+   e um botão grande "Gravei". Sem formulário, sem ruído.
+   --------------------------------------------------------------------------- */
+function viewFoco(rid, idxStr) {
+  const r = getRoteiro(rid);
+  if (!r || !r.cenas.length) { go("#/roteiro/" + rid); return; }
+  const total = r.cenas.length;
+  let idx = parseInt(idxStr, 10);
+  if (isNaN(idx)) idx = Math.max(0, r.cenas.findIndex((c) => !c.gravada)); // retoma na 1ª não gravada
+  idx = Math.max(0, Math.min(total - 1, idx));
+  const c = r.cenas[idx];
+  const tec = tecnica(c.tecnicaId);
+  const gravadas = r.cenas.filter((x) => x.gravada).length;
+
+  // Só mostra o que existe — nada de campo vazio ocupando espaço.
+  const extras = [
+    tec ? `<span class="foco-chip"><i class="ti ${esc(tec.icone)}"></i> ${esc(tec.nome)}</span>` : "",
+    c.luz ? `<span class="foco-chip"><i class="ti ti-bulb"></i> ${esc(luzLabel(c.luz))}</span>` : "",
+    c.local ? `<span class="foco-chip"><i class="ti ti-map-pin"></i> ${esc(c.local)}</span>` : "",
+    c.horario ? `<span class="foco-chip"><i class="ti ti-clock"></i> ${esc(c.horario)}</span>` : "",
+    c.equipamento ? `<span class="foco-chip"><i class="ti ti-device-camera"></i> ${esc(c.equipamento)}</span>` : ""
+  ].filter(Boolean).join("");
+
+  const fala = c.descricao ? esc(c.descricao) : (c.dica ? esc(c.dica) : "(sem texto nesta cena)");
+  const falaCls = c.descricao ? "" : " vazia";
+
+  app.innerHTML = `
+    <div class="foco">
+      <div class="foco-top">
+        <button class="icon-btn" data-act="sair-foco" data-rid="${rid}" aria-label="Sair"><i class="ti ti-x"></i></button>
+        <div class="foco-prog">
+          <span>Cena ${idx + 1} de ${total}</span>
+          ${progbar(gravadas, total)}
+        </div>
+      </div>
+
+      <div class="foco-corpo">
+        <p class="foco-fala${falaCls}">${fala}</p>
+        ${extras ? `<div class="foco-chips">${extras}</div>` : ""}
+      </div>
+
+      <div class="foco-acoes">
+        <button class="btn btn-outline foco-nav" data-act="foco-ir" data-rid="${rid}" data-idx="${idx - 1}" ${idx === 0 ? "disabled" : ""} aria-label="Anterior"><i class="ti ti-chevron-left"></i></button>
+        <button class="btn ${c.gravada ? "btn-ok" : "btn-primary"} foco-ok" data-act="foco-gravei" data-rid="${rid}" data-cid="${c.id}" data-idx="${idx}">
+          <i class="ti ${c.gravada ? "ti-circle-check" : "ti-video"}"></i> ${c.gravada ? "Gravada ✓" : "Gravei"}
+        </button>
+        <button class="btn btn-outline foco-nav" data-act="foco-ir" data-rid="${rid}" data-idx="${idx + 1}" ${idx === total - 1 ? "disabled" : ""} aria-label="Próxima"><i class="ti ti-chevron-right"></i></button>
+      </div>
+    </div>`;
 }
 
 /* ---------------- Configurações / backup ---------------- */
@@ -1691,6 +1747,7 @@ function render() {
   if (a === "tecnica") return viewTecnica(b);
   if (a === "guia") return viewGuia();
   if (a === "gravacao") return viewGravacao(b);
+  if (a === "foco") return viewFoco(b, c);
   if (a === "config") return viewConfig();
   return viewHome();
 }
@@ -1729,6 +1786,24 @@ document.addEventListener("click", async (e) => {
 
   // Checklist de gravação
   if (act === "modo-gravacao") return go("#/gravacao/" + d.id);
+
+  // Modo gravação (foco)
+  if (act === "modo-foco") return go("#/foco/" + d.rid);
+  if (act === "sair-foco") return go("#/roteiro/" + d.rid);
+  if (act === "foco-ir") return go("#/foco/" + d.rid + "/" + d.idx);
+  if (act === "foco-gravei") {
+    const all = store.getRoteiros();
+    const rr = all.find((x) => x.id === d.rid);
+    const cc = rr && rr.cenas.find((x) => x.id === d.cid);
+    if (!cc) return;
+    const marcando = !cc.gravada;
+    updateCena(d.rid, d.cid, { gravada: marcando });
+    const i = parseInt(d.idx, 10);
+    // Ao marcar, já pula pra próxima; se era a última, mostra o fim.
+    if (marcando && i < rr.cenas.length - 1) return go("#/foco/" + d.rid + "/" + (i + 1));
+    if (marcando) { toast("Roteiro gravado! 🎬", { icon: "ti-circle-check" }); return go("#/roteiro/" + d.rid); }
+    return render();
+  }
   if (act === "grav-toggle" || act === "toggle-gravada") {
     const all = store.getRoteiros();
     const r = all.find((x) => x.id === d.rid);

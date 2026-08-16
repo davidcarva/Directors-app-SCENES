@@ -22,7 +22,10 @@ module.exports = async function handler(req, res) {
   const texto = String(body.texto || "").trim(); // roteiro pronto (ex: do Newsletter)
   const estilo = String(body.estilo || "").trim();
   const auto = !body.nCenas; // no modo "texto", 0/ausente = a IA decide pelos beats
-  const nCenas = Math.max(3, Math.min(12, parseInt(body.nCenas, 10) || 6));
+  const nCenas = Math.max(2, Math.min(12, parseInt(body.nCenas, 10) || 6));
+  // perfil: "simples" = vídeo falado (poucos blocos, sem técnica/ângulo)
+  //         "elaborado" = plano de filmagem completo (padrão)
+  const simples = String(body.perfil || "") === "simples";
   // Fallback: clientes que não mandam as listas (ex: Newsletter) usam o padrão do app.
   const FUNCOES_PADRAO = [
     { id: "gancho", nome: "Gancho" },
@@ -45,18 +48,31 @@ module.exports = async function handler(req, res) {
 {"nome":"título curto do vídeo","mensagem":"a ideia central em 1 frase","cenas":[{"descricao":"o que acontece/aparece + a fala ou legenda dessa cena; concreto e gravável, 1-2 frases","funcao":"<id>","tecnicaId":"<id ou null>"}]}
 Regras rígidas:
 - "funcao" DEVE ser o ID (o texto ANTES do "="), nunca o nome. Ids válidos: ${funcList}.
-- "tecnicaId" DEVE ser o ID (texto antes do "="), ou null de verdade (não a string "null"), se nenhuma encaixar. Ids válidos: ${tecList}.
-- Descrições concretas do que filmar (evite abstração). Nada de texto fora do JSON.
+${simples
+  ? '- "tecnicaId" DEVE ser null em todas as cenas.'
+  : `- "tecnicaId" DEVE ser o ID (texto antes do "="), ou null de verdade (não a string "null"), se nenhuma encaixar. Ids válidos: ${tecList}.`}
+${simples ? "" : "- Descrições concretas do que filmar (evite abstração)."} Nada de texto fora do JSON.
 ${estilo ? "- Estilo/tom desejado: " + estilo : ""}`;
 
+  const sysSimples =
+`Você divide um roteiro JÁ ESCRITO em poucos BLOCOS DE FALA, em português do Brasil.
+É um vídeo simples: a pessoa falando pra câmera (celular, cenário único). NÃO é um plano de filmagem.
+- Cada bloco = um pedaço da FALA, copiado do texto original (só limpe marcadores como [pausa]).
+- "descricao" contém APENAS a fala daquele bloco. Nada de "close em...", "corta para...", "imagens de...".
+- NÃO invente conteúdo, não reescreva, não acrescente indicação de câmera/ângulo.
+- Junte trechos curtos: prefira ${auto ? "3 ou 4 blocos no total" : nCenas + " blocos"} — melhor poucos e grandes do que muitos e picados.
+- "tecnicaId" DEVE ser null em todos (vídeo simples não tem técnica por cena).
+- "funcao": use só ${funcList}. Normalmente: 1º bloco gancho, do meio desenvolvimento, último encerramento.
+${regrasComuns}`;
+
   const sys = texto
-    ? `Você é um diretor que transforma um roteiro JÁ ESCRITO em um plano de filmagem short-form (Reels/TikTok/Shorts) em português do Brasil.
+    ? (simples ? sysSimples : `Você é um diretor que transforma um roteiro JÁ ESCRITO em um plano de filmagem short-form (Reels/TikTok/Shorts) em português do Brasil.
 Divida o roteiro recebido em cenas filmáveis, na ordem original.
 - PRESERVE as falas/legendas do autor: cada "descricao" deve conter o trecho de fala daquela cena (pode limpar marcadores como [pausa]) MAIS uma indicação visual curta do que aparece na tela.
 - NÃO invente conteúdo novo nem mude a mensagem: você está decupando, não reescrevendo.
 - Use os cortes naturais do texto (marcadores como [pausa], quebras de parágrafo, mudanças de assunto) pra definir as cenas.
 ${auto ? "- Use quantas cenas o texto pedir (normalmente 4 a 8)." : "- Exatamente " + nCenas + " cenas."}
-${regrasComuns}`
+${regrasComuns}`)
     : `Você é um roteirista de vídeos short-form (Reels/TikTok/Shorts) em português do Brasil.
 Recebe um tema e devolve um roteiro dividido em cenas curtas e FILMÁVEIS.
 - Exatamente ${nCenas} cenas, na ordem da narrativa (começa com gancho, termina com fecho/CTA).
