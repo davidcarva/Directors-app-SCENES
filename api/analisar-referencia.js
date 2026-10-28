@@ -31,6 +31,8 @@ Devolva SOMENTE JSON válido neste formato exato:
 {"titulo":"nome curto e descritivo do take","plano":"tamanho do plano","angulo":"altura/ângulo da câmera","lente":"lente aproximada e por quê","profundidade":"nitidez do fundo / abertura aproximada","luz":{"direcao":"de onde vem","qualidade":"dura ou suave","temperatura":"quente, neutra ou fria","resumo":"o esquema de luz em 1 frase"},"composicao":"como o quadro está organizado","mood":"a sensação que passa, em poucas palavras","cores":"a paleta em 1 frase","tecnicas":["<id>"],"reproduzir":["passo prático 1","passo 2","passo 3"]}
 Regras:
 - Seja CONCRETO e técnico, mas em linguagem direta. Nada de poesia vaga.
+- LUZ: deduza pela EVIDÊNCIA na imagem, não pelo clima geral. Onde estão as altas-luzes e as sombras? Se o sujeito está escuro contra um fundo claro, é CONTRALUZ. Se há um contorno brilhante na borda do sujeito, é luz de trás/recorte. Sombra dura e recortada = fonte dura/pequena; transição suave = fonte grande/difusa. Diga a direção em relação ao sujeito (atrás, lateral esquerda/direita, frontal, de cima).
+- PLANO: julgue pelo quanto do corpo aparece (close = rosto; médio = cintura pra cima; aberto = corpo inteiro + ambiente).
 - "tecnicas": só ids desta lista (0 a 3 que realmente se aplicam): ${tecList}.
 - "reproduzir": 3 a 5 passos EXECUTÁVEIS com este equipamento: ${gear}. Diga onde pôr a câmera, onde pôr a luz/sujeito e o ajuste no aparelho. Se o take exigir algo que esse equipamento não faz, diga a aproximação possível.
 - Nada de texto fora do JSON.
@@ -46,7 +48,7 @@ ${nota ? "- O usuário quer focar em: " + nota : ""}`;
           { role: "system", content: sys },
           { role: "user", content: [
             { type: "text", text: "Analise este frame de referência." },
-            { type: "image_url", image_url: { url: imagem, detail: "low" } }
+            { type: "image_url", image_url: { url: imagem, detail: "high" } }
           ] }
         ],
         response_format: { type: "json_object" },
