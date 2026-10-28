@@ -78,7 +78,17 @@ const store = {
   saveTecImgs(m) {
     localStorage.setItem("tecImgs", JSON.stringify(m));
     if (window.Cloud && window.Cloud.notifyTecImgs) window.Cloud.notifyTecImgs(m);
-  }
+  },
+  getRefs() {
+    try { return JSON.parse(localStorage.getItem("refs") || "[]"); }
+    catch { return []; }
+  },
+  saveRefs(r) {
+    localStorage.setItem("refs", JSON.stringify(r));
+    if (window.Cloud && window.Cloud.notifyRefs) window.Cloud.notifyRefs(r);
+  },
+  getEquipamento() { return localStorage.getItem("equipamento") || ""; },
+  saveEquipamento(v) { localStorage.setItem("equipamento", v || ""); }
 };
 
 function uid(p) { return p + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7); }
@@ -516,6 +526,7 @@ function sideNav(active) {
     <div class="side-brand"><i class="ti ti-movie"></i> Diretor</div>
     <nav class="side-nav">
       ${item("#/", "ti-clapperboard", "Roteiros", "roteiros")}
+      ${item("#/refs", "ti-photo-star", "Referências", "refs")}
       ${item("#/acervo", "ti-books", "Acervo", "acervo")}
       ${item("#/config", "ti-settings", "Configurações", "config")}
     </nav>
@@ -527,6 +538,7 @@ function bottomNav(active) {
     `<a href="${href}" class="${active === key ? "active" : ""}"><i class="ti ${icon}"></i>${label}</a>`;
   return sideNav(active) + `<div class="bottom-nav">
     ${item("#/", "ti-clapperboard", "Roteiros", "roteiros")}
+    ${item("#/refs", "ti-photo-star", "Refs", "refs")}
     ${item("#/acervo", "ti-books", "Acervo", "acervo")}
   </div>`;
 }
@@ -796,6 +808,206 @@ function abrirRoteiroIA(modo) {
   }
 
   setTimeout(() => temaEl.focus(), 60);
+}
+
+/* ---------------- Referências visuais (biblioteca + análise) ----------------
+   Você joga qualquer imagem (print de filme, save do Cosmos, export do
+   ShotDeck) e a IA devolve a ficha técnica do take + como reproduzir com o
+   seu equipamento. A paleta é extraída dos pixels aqui mesmo (sem API).
+   --------------------------------------------------------------------------- */
+
+// Paleta dominante: amostra os pixels e agrupa por "balde" de cor.
+function extrairPaleta(img, qtd = 5) {
+  try {
+    const L = 64;
+    const c = document.createElement("canvas");
+    c.width = L; c.height = L;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, L, L);
+    const d = g.getImageData(0, 0, L, L).data;
+    const baldes = new Map();
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 125) continue;
+      const r = d[i] >> 5, gg = d[i + 1] >> 5, b = d[i + 2] >> 5;
+      const k = (r << 10) | (gg << 5) | b;
+      const at = baldes.get(k) || { n: 0, r: 0, g: 0, b: 0 };
+      at.n++; at.r += d[i]; at.g += d[i + 1]; at.b += d[i + 2];
+      baldes.set(k, at);
+    }
+    return [...baldes.values()]
+      .sort((a, b) => b.n - a.n)
+      .slice(0, qtd)
+      .map((o) => "#" + [o.r, o.g, o.b].map((v) => Math.round(v / o.n).toString(16).padStart(2, "0")).join(""));
+  } catch (e) { return []; }
+}
+function paletaDoBlob(blob) {
+  return new Promise((res) => {
+    const img = new Image();
+    const u = URL.createObjectURL(blob);
+    img.onload = () => { const p = extrairPaleta(img); URL.revokeObjectURL(u); res(p); };
+    img.onerror = () => { URL.revokeObjectURL(u); res([]); };
+    img.src = u;
+  });
+}
+function blobParaDataURL(blob) {
+  return new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => res(null);
+    fr.readAsDataURL(blob);
+  });
+}
+
+function refPorId(id) { return store.getRefs().find((r) => r.id === id); }
+
+/* --- Biblioteca (grid) --- */
+function viewRefs() {
+  const refs = store.getRefs().sort((a, b) => b.criadoEm - a.criadoEm);
+  const filtro = (sessionStorage.getItem("refFiltro") || "").toLowerCase();
+
+  const planos = [...new Set(refs.map((r) => (r.analise && r.analise.plano) || "").filter(Boolean))].slice(0, 8);
+  const chips = planos.length ? `<div class="chips">
+      <button class="chip ${!filtro ? "active" : ""}" data-act="ref-filtrar" data-f="">Todas</button>
+      ${planos.map((p) => `<button class="chip ${filtro === p.toLowerCase() ? "active" : ""}" data-act="ref-filtrar" data-f="${esc(p)}">${esc(p)}</button>`).join("")}
+    </div>` : "";
+
+  const lista = refs.filter((r) => !filtro || JSON.stringify(r.analise || {}).toLowerCase().includes(filtro));
+
+  const cards = lista.map((r) => {
+    const a = r.analise || {};
+    const sw = (r.paleta || []).slice(0, 5).map((c) => `<span class="sw" style="background:${esc(c)}"></span>`).join("");
+    const sub = [a.plano, a.angulo].filter(Boolean).join(" · ") || (a.analisando ? "analisando…" : "sem análise");
+    return `<button class="ref-card" data-act="abrir-ref" data-id="${r.id}">
+        <div class="ref-thumb"><img data-img="${esc(r.imagemId)}" alt="">${a.analisando ? `<span class="ref-load"><i class="ti ti-loader-2 spin"></i></span>` : ""}</div>
+        <div class="ref-meta">
+          <div class="ref-nome">${esc(a.titulo || "Referência")}</div>
+          <div class="ref-sub">${esc(sub)}</div>
+          ${sw ? `<div class="ref-paleta">${sw}</div>` : ""}
+        </div>
+      </button>`;
+  }).join("");
+
+  const vazio = `<div class="onboarding">
+      <div class="ob-icon"><i class="ti ti-photo-star"></i></div>
+      <h2>Seu banco de referências</h2>
+      <p>Jogue aqui qualquer imagem que te inspira — print de filme, save do Cosmos, export do ShotDeck. A IA devolve o plano, a lente, a luz, a paleta e <strong>como reproduzir com o seu equipamento</strong>.</p>
+      <button class="btn btn-primary" data-act="add-ref"><i class="ti ti-plus"></i> Adicionar referência</button>
+    </div>`;
+
+  app.innerHTML =
+    topbar("Referências", {
+      right: `<button class="icon-btn" data-act="add-ref" aria-label="Adicionar"><i class="ti ti-plus"></i></button>`
+    }) +
+    `<div class="content">
+       ${refs.length ? chips + `<div class="ref-grid">${cards}</div>` : vazio}
+       ${refs.length ? `<div class="spacer"></div><button class="btn btn-primary" data-act="add-ref"><i class="ti ti-plus"></i> Adicionar referência</button>` : ""}
+     </div>` +
+    bottomNav("refs");
+
+  hydrateImgs();
+}
+
+/* --- Detalhe: a ficha técnica do take --- */
+function viewRef(id) {
+  const r = refPorId(id);
+  if (!r) { go("#/refs"); return; }
+  const a = r.analise || {};
+  const linha = (ic, rot, val) => val
+    ? `<div class="ficha-l"><i class="ti ${ic}"></i><div><span class="ficha-r">${esc(rot)}</span><span class="ficha-v">${esc(val)}</span></div></div>` : "";
+
+  const luz = a.luz || {};
+  const luzTxt = luz.resumo || [luz.direcao, luz.qualidade, luz.temperatura].filter(Boolean).join(" · ");
+  const tecs = (a.tecnicas || []).map((tid) => tecnica(tid)).filter(Boolean);
+  const passos = Array.isArray(a.reproduzir) ? a.reproduzir : [];
+  const paleta = (r.paleta || []).map((c) => `<span class="sw lg" style="background:${esc(c)}" title="${esc(c)}"></span>`).join("");
+  const temFicha = a.plano || a.angulo || a.lente;
+  const temEquip = !!store.getEquipamento();
+
+  app.innerHTML =
+    topbar(a.titulo || "Referência", {
+      back: "go-refs",
+      right: `<button class="icon-btn" data-act="del-ref" data-id="${r.id}" aria-label="Excluir"><i class="ti ti-trash"></i></button>`
+    }) +
+    `<div class="content">
+       <div class="ref-hero"><img data-img="${esc(r.imagemId)}" alt=""></div>
+       ${paleta ? `<div class="ref-paleta lg mt-2">${paleta}</div>` : ""}
+       ${a.mood ? `<p class="hint mt-2">${esc(a.mood)}</p>` : ""}
+       ${a.analisando ? `<p class="ia-msg info mt-3"><i class="ti ti-loader-2 spin"></i> Analisando o take…</p>` : ""}
+
+       ${temFicha ? `
+       <div class="spacer-sm"></div>
+       <p class="section-title">Ficha técnica</p>
+       <div class="card ficha">
+         ${linha("ti-crop", "Plano", a.plano)}
+         ${linha("ti-angle", "Ângulo", a.angulo)}
+         ${linha("ti-aperture", "Lente", a.lente)}
+         ${linha("ti-focus-2", "Profundidade", a.profundidade)}
+         ${linha("ti-bulb", "Luz", luzTxt)}
+         ${linha("ti-layout-grid", "Composição", a.composicao)}
+         ${linha("ti-palette", "Cores", a.cores)}
+       </div>` : ""}
+
+       ${passos.length ? `
+       <div class="spacer-sm"></div>
+       <p class="section-title">Como reproduzir${temEquip ? " (com o seu equipamento)" : ""}</p>
+       <ol class="steps">${passos.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>
+       ${temEquip ? "" : `<p class="hint">Dica: cadastre seu equipamento em Configurações pra receber passos sob medida.</p>`}` : ""}
+
+       ${tecs.length ? `
+       <div class="spacer-sm"></div>
+       <p class="section-title">Técnicas do acervo</p>
+       <div class="sug-list">${tecs.map((t) => `<button class="sug-chip" data-act="ver-tecnica" data-tid="${t.id}"><i class="ti ${esc(t.icone)}"></i> ${esc(t.nome)}</button>`).join("")}</div>` : ""}
+
+       <div class="spacer"></div>
+       <button class="btn btn-outline" data-act="reanalisar-ref" data-id="${r.id}"><i class="ti ti-refresh"></i> Analisar de novo</button>
+     </div>` +
+    bottomNav("refs");
+
+  hydrateImgs();
+}
+
+// Manda a imagem pra IA de visão e guarda a ficha técnica.
+async function analisarRef(id) {
+  const r = refPorId(id);
+  if (!r) return;
+  const blob = await idbGet(r.imagemId);
+  if (!blob) { toast("Imagem não está neste aparelho", { icon: "ti-alert-circle" }); return; }
+  const dataUrl = await blobParaDataURL(blob);
+  if (!dataUrl) { toast("Não consegui ler a imagem", { icon: "ti-alert-circle" }); return; }
+
+  const marcar = (patch) => {
+    const all = store.getRefs();
+    const alvo = all.find((x) => x.id === id);
+    if (!alvo) return;
+    alvo.analise = Object.assign({}, alvo.analise, patch);
+    store.saveRefs(all);
+  };
+  marcar({ analisando: true });
+  render();
+
+  try {
+    const resp = await fetch("/api/analisar-referencia.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imagem: dataUrl,
+        equipamento: store.getEquipamento(),
+        tecnicas: (window.TECNICAS || []).map((t) => ({ id: t.id, nome: t.nome }))
+      })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.erro || ("Erro " + resp.status));
+    data.analisando = false;
+    const all = store.getRefs();
+    const alvo = all.find((x) => x.id === id);
+    if (alvo) { alvo.analise = data; store.saveRefs(all); }
+    toast("Referência analisada", { icon: "ti-sparkles" });
+  } catch (e) {
+    marcar({ analisando: false });
+    const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    toast(String((e && e.message) || e) + (local ? " (IA só no site publicado)" : ""), { icon: "ti-alert-circle", ms: 4200 });
+  }
+  render();
 }
 
 /* ---------------- Telas ---------------- */
@@ -1538,6 +1750,11 @@ function viewConfig() {
     `<div class="content">
        ${cloudBlock()}
        <div class="spacer"></div>
+       <p class="section-title">Seu equipamento</p>
+       <p class="hint mb-2">Usado pela IA pra dizer <strong>como reproduzir</strong> cada referência com o que você realmente tem.</p>
+       <input id="cfg-equip" type="text" placeholder="Ex: iPhone 13, gimbal, softbox pequena, tripé" value="${esc(store.getEquipamento())}">
+
+       <div class="spacer"></div>
        <p class="section-title">Backup dos seus dados</p>
        <p class="hint mb-2">Seus roteiros e fotos ficam só neste aparelho. Exporte de vez em quando pra não perder nada ao limpar o navegador ou trocar de celular.</p>
        <div class="btn-row mb-1">
@@ -1554,6 +1771,9 @@ function viewConfig() {
        </div>
      </div>` +
     bottomNav("config");
+
+  const eq = document.getElementById("cfg-equip");
+  if (eq) eq.addEventListener("input", () => store.saveEquipamento(eq.value));
 }
 
 async function exportarDados() {
@@ -1751,6 +1971,8 @@ function render() {
   if (a === "roteiro") return viewRoteiro(b);
   if (a === "cena") return viewCena(b, c);
   if (a === "acervo") return viewAcervo();
+  if (a === "refs") return viewRefs();
+  if (a === "ref") return viewRef(b);
   if (a === "tecnica") return viewTecnica(b);
   if (a === "guia") return viewGuia();
   if (a === "gravacao") return viewGravacao(b);
@@ -1778,6 +2000,33 @@ document.addEventListener("click", async (e) => {
   if (act === "ver-tecnica") return go("#/tecnica/" + d.tid);
   if (act === "abrir-guia") return go("#/guia");
   if (act === "abrir-config") return go("#/config");
+
+  // Referências visuais
+  if (act === "go-refs") return go("#/refs");
+  if (act === "abrir-ref") return go("#/ref/" + d.id);
+  if (act === "ref-filtrar") { sessionStorage.setItem("refFiltro", d.f || ""); return render(); }
+  if (act === "add-ref") {
+    return pickImage(async (imgId) => {
+      const blob = await idbGet(imgId);
+      const paleta = blob ? await paletaDoBlob(blob) : [];
+      const nova = { id: uid("ref"), imagemId: imgId, paleta, analise: {}, criadoEm: Date.now() };
+      const all = store.getRefs();
+      all.push(nova);
+      store.saveRefs(all);
+      go("#/ref/" + nova.id);
+      analisarRef(nova.id); // analisa em seguida, já na tela de detalhe
+    });
+  }
+  if (act === "reanalisar-ref") return analisarRef(d.id);
+  if (act === "del-ref") {
+    const ok = await confirmDialog({ title: "Excluir referência", message: "Remover esta referência da sua biblioteca?", confirm: "Excluir", danger: true });
+    if (!ok) return;
+    const alvo = refPorId(d.id);
+    if (alvo && alvo.imagemId) await idbDel(alvo.imagemId);
+    store.saveRefs(store.getRefs().filter((x) => x.id !== d.id));
+    toast("Referência excluída", { icon: "ti-trash" });
+    return go("#/refs");
+  }
 
   if (act === "novo-roteiro-ia") return abrirRoteiroIA();
   if (act === "importar-roteiro-ia") return abrirRoteiroIA("importar");

@@ -57,7 +57,8 @@
         return snap.exists() ? (snap.data().data || null) : null;
       } catch (e) { return null; }
     },
-    notifyTecImgs(map) { saveTecImgs(map); }
+    notifyTecImgs(map) { saveTecImgs(map); },
+    notifyRefs(refs) { saveRefs(refs); }
   };
 
   function imgDoc(id) { return fns.doc(db, "users", user.uid, "imgs", id); }
@@ -199,6 +200,7 @@
     const merged = [...byId.values()];
     writeLocal(merged);
     await pullTecImgs();
+    await pullRefs();
     emit("cloud-synced", { count: merged.length });
     pushAll(merged); // garante que o que é mais novo local suba
     backfillImagens(merged); // sobe imagens locais que ainda não estão na nuvem
@@ -227,11 +229,39 @@
     try { await fns.setDoc(tecImgsRef(), { map: map || {} }); } catch (e) {}
   }
 
+  // ---- Biblioteca de referências (users/{uid}/meta/refs) ----
+  function refsRef() { return fns.doc(db, "users", user.uid, "meta", "refs"); }
+  async function pullRefs() {
+    if (!ready || !user) return;
+    try {
+      const snap = await fns.getDoc(refsRef());
+      const remoto = (snap.exists() && Array.isArray(snap.data().lista)) ? snap.data().lista : [];
+      let local = [];
+      try { local = JSON.parse(localStorage.getItem("refs") || "[]"); } catch {}
+      const byId = new Map();
+      remoto.forEach((r) => byId.set(r.id, r));
+      local.forEach((r) => {
+        const cur = byId.get(r.id);
+        if (!cur || (r.criadoEm || 0) >= (cur.criadoEm || 0)) byId.set(r.id, r);
+      });
+      const merged = [...byId.values()];
+      localStorage.setItem("refs", JSON.stringify(merged));
+      await fns.setDoc(refsRef(), { lista: merged });
+    } catch (e) { console.warn("[Cloud] refs", e && e.code); }
+  }
+  async function saveRefs(lista) {
+    if (!ready || !user) return;
+    try { await fns.setDoc(refsRef(), { lista: lista || [] }); } catch (e) {}
+  }
+
   // Sobe as imagens referenciadas que ainda não estão na nuvem.
   async function backfillImagens(roteiros) {
     if (!ready || !user) return;
     const ids = new Set();
     (roteiros || []).forEach((r) => (r.cenas || []).forEach((c) => { if (c.imagemId) ids.add(c.imagemId); }));
+    try {
+      JSON.parse(localStorage.getItem("refs") || "[]").forEach((r) => { if (r.imagemId) ids.add(r.imagemId); });
+    } catch {}
     try {
       const m = JSON.parse(localStorage.getItem("tecImgs") || "{}");
       Object.values(m).forEach((arr) => (arr || []).forEach((id) => ids.add(id)));
