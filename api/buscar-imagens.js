@@ -10,6 +10,7 @@
    ============================================================ */
 const OPENVERSE = "https://api.openverse.org/v1/images/";
 const MAX_BYTES = 6 * 1024 * 1024;
+const UA = { "User-Agent": "Mozilla/5.0 (compatible; DiretorApp/1.0; referencias visuais)" };
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ erro: "Use POST." }); return; }
@@ -31,31 +32,61 @@ module.exports = async function handler(req, res) {
     mature: "false"
   }).toString();
 
+  // Openverse costuma barrar acesso anônimo (429/Cloudflare); se falhar,
+  // caímos no Wikimedia Commons, que funciona sem chave.
   try {
-    const r = await fetch(url, { headers: { "User-Agent": "DiretorApp/1.0 (referencias visuais)" } });
-    if (!r.ok) {
-      const t = await r.text();
-      res.status(502).json({ erro: "Openverse respondeu " + r.status, detalhe: t.slice(0, 200) });
-      return;
+    const r = await fetch(url, { headers: UA });
+    if (r.ok) {
+      const data = await r.json();
+      const itens = (data.results || []).map((x) => ({
+        id: x.id,
+        titulo: x.title || "",
+        autor: x.creator || "",
+        licenca: [x.license, x.license_version].filter(Boolean).join(" ").toUpperCase(),
+        fonte: x.source || "openverse",
+        pagina: x.foreign_landing_url || "",
+        thumb: x.thumbnail || x.url,
+        full: x.url
+      })).filter((x) => x.thumb);
+      if (itens.length) { res.status(200).json({ itens, fonte: "openverse" }); return; }
     }
-    const data = await r.json();
-    const itens = (data.results || []).map((x) => ({
-      id: x.id,
-      titulo: x.title || "",
-      autor: x.creator || "",
-      licenca: [x.license, x.license_version].filter(Boolean).join(" ").toUpperCase(),
-      fonte: x.source || "",
-      pagina: x.foreign_landing_url || "",
-      thumb: x.thumbnail || x.url,
-      full: x.url
-    })).filter((x) => x.thumb);
-    res.status(200).json({ itens });
+  } catch (e) { /* cai no Commons */ }
+
+  try {
+    const itens = await buscarCommons(q);
+    res.status(200).json({ itens, fonte: "wikimedia" });
   } catch (e) {
-    res.status(500).json({ erro: "Falha na busca.", detalhe: String(e).slice(0, 200) });
+    res.status(502).json({ erro: "As fontes de busca não responderam agora. Tente de novo em instantes." });
   }
 };
 
-const UA = { "User-Agent": "Mozilla/5.0 (compatible; DiretorApp/1.0; referencias visuais)" };
+async function buscarCommons(q) {
+  const url = "https://commons.wikimedia.org/w/api.php?" + new URLSearchParams({
+    action: "query", format: "json", origin: "*",
+    generator: "search", gsrnamespace: "6", gsrlimit: "24", gsrsearch: q,
+    prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "500"
+  }).toString();
+  const r = await fetch(url, { headers: UA });
+  if (!r.ok) throw new Error("commons " + r.status);
+  const json = await r.json();
+  const pages = (json.query && json.query.pages) ? Object.values(json.query.pages) : [];
+  const limpar = (h) => String(h || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
+  return pages.map((p) => {
+    const ii = (p.imageinfo || [])[0];
+    if (!ii || !ii.thumburl) return null;
+    const meta = ii.extmetadata || {};
+    return {
+      id: String(p.pageid),
+      titulo: String(p.title || "").replace(/^File:/, "").replace(/\.[a-z]+$/i, ""),
+      autor: limpar(meta.Artist && meta.Artist.value) || "",
+      licenca: (meta.LicenseShortName && meta.LicenseShortName.value) || "CC",
+      fonte: "wikimedia",
+      pagina: ii.descriptionurl || "",
+      thumb: ii.thumburl,
+      full: ii.url || ii.thumburl
+    };
+  }).filter(Boolean);
+}
 
 // Aceita link direto de imagem OU uma página (pin do Pinterest, item do
 // Cosmos, post...) — nesse caso pega a imagem principal via og:image.
