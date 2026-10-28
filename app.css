@@ -1023,6 +1023,63 @@ input[type="range"]::-moz-range-thumb {
 .ficha-r { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
 .ficha-v { display: block; font-size: 15px; line-height: 1.45; margin-top: 2px; }
 
+/* Faixa de referências sugeridas dentro da cena */
+.ref-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.ref-strip::-webkit-scrollbar { display: none; }
+.ref-mini {
+  flex: 0 0 132px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  padding: 0;
+  color: var(--text-2);
+  text-align: left;
+}
+.ref-mini.usada { border-color: var(--accent); }
+.ref-mini img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; }
+.ref-mini span {
+  display: block; padding: 6px 8px; font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ============================================================
+   Lado a lado — referência + texto da cena
+   ============================================================ */
+.lado {
+  position: fixed; inset: 0; z-index: 60;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 14px calc(14px + env(safe-area-inset-bottom, 0px));
+}
+.lado-top { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.lado-titulo { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); }
+.lado-grade { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding-top: 10px; }
+.lado-painel { min-width: 0; }
+.lado-img {
+  border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.lado-img img { width: 100%; height: auto; display: block; max-height: 42vh; object-fit: contain; }
+.lado-nome { font-size: 15px; font-weight: 600; margin-top: 10px; }
+.lado-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lado-tags .foco-chip { font-size: 12px; padding: 6px 10px; }
+.lado-nav { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.lado-nav .btn { padding: 10px 12px; flex: 0 0 auto; }
+.lado-cont { font-size: 12px; color: var(--text-3); min-width: 54px; text-align: center; }
+.lado-texto textarea { font-size: 16px; }
+.lado-vazio { text-align: center; padding: 30px 16px; color: var(--text-2); }
+.lado-vazio i { font-size: 40px; color: var(--text-3); }
+.lado-vazio p { margin: 12px 0 18px; }
+
+@media (min-width: 900px) {
+  .lado { padding-left: 28px; padding-right: 28px; }
+  .lado-grade { flex-direction: row; gap: 24px; align-items: flex-start; }
+  .lado-painel { flex: 1; }
+  .lado-img img { max-height: 70vh; }
+  .lado-texto { position: sticky; top: 0; }
+}
+
 /* ============================================================
    Modo gravação (foco) — tela cheia, uma cena por vez
    ============================================================ */

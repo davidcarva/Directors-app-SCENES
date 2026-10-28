@@ -10,6 +10,10 @@
       "use": "@vercel/node"
     },
     {
+      "src": "api/buscar-imagens.js",
+      "use": "@vercel/node"
+    },
+    {
       "src": "index.html",
       "use": "@vercel/static"
     },

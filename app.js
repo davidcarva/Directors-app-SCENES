@@ -481,6 +481,26 @@ window.addEventListener("load", () => {
   if (!location.hash) location.hash = "#/";
   render();
 });
+// Colar imagem com Ctrl+V em qualquer tela de referências.
+window.addEventListener("paste", async (e) => {
+  if (!/^#\/(refs|ref|descobrir)/.test(location.hash)) return;
+  const it = [...((e.clipboardData && e.clipboardData.items) || [])].find((x) => x.type.startsWith("image/"));
+  if (!it) return;
+  e.preventDefault();
+  const blob = it.getAsFile();
+  if (blob) { toast("Imagem colada", { icon: "ti-clipboard-check" }); criarRefDeBlob(blob); }
+});
+
+// Compartilhar pro app (PWA): Pinterest/Cosmos → Compartilhar → Diretor.
+window.addEventListener("load", () => {
+  const p = new URLSearchParams(location.search);
+  const alvo = (p.get("url") || p.get("text") || "").trim();
+  if (!alvo || !/^https?:\/\//i.test(alvo)) return;
+  history.replaceState(null, "", location.pathname + "#/refs");
+  render();
+  criarRefDeLink(alvo);
+});
+
 // Nuvem: re-renderiza quando o login muda ou quando o sync traz dados.
 window.addEventListener("cloud-auth", () => render());
 window.addEventListener("cloud-synced", () => render());
@@ -860,6 +880,94 @@ function blobParaDataURL(blob) {
 
 function refPorId(id) { return store.getRefs().find((r) => r.id === id); }
 
+// Cria a referência a partir de um blob (serve pra arquivo, colar, link e
+// compartilhamento) e já manda analisar.
+async function criarRefDeBlob(blob, { abrir = true } = {}) {
+  if (!blob) return null;
+  const menor = await compress(blob);
+  const imgId = await idbPut(menor);
+  const paleta = await paletaDoBlob(menor);
+  const nova = { id: uid("ref"), imagemId: imgId, paleta, analise: {}, criadoEm: Date.now() };
+  const all = store.getRefs();
+  all.push(nova);
+  store.saveRefs(all);
+  if (abrir) go("#/ref/" + nova.id);
+  analisarRef(nova.id);
+  return nova.id;
+}
+function dataUrlParaBlob(dataUrl) {
+  return fetch(dataUrl).then((r) => r.blob()).catch(() => null);
+}
+// Baixa a imagem de um link (ou a imagem principal de uma página) via proxy.
+async function criarRefDeLink(url) {
+  toast("Baixando imagem…", { icon: "ti-download", ms: 3000 });
+  try {
+    const resp = await fetch("/api/buscar-imagens.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baixar: url })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.erro || ("Erro " + resp.status));
+    const blob = await dataUrlParaBlob(data.dataUrl);
+    if (!blob) throw new Error("Imagem inválida.");
+    await criarRefDeBlob(blob);
+  } catch (e) {
+    toast(String((e && e.message) || e), { icon: "ti-alert-circle", ms: 4500 });
+  }
+}
+
+// Lê uma imagem da área de transferência (copiou do Pinterest/Cosmos → cola aqui).
+async function colarImagemDaArea() {
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("sem-api");
+    const itens = await navigator.clipboard.read();
+    for (const it of itens) {
+      const tipo = it.types.find((t) => t.startsWith("image/"));
+      if (tipo) { await criarRefDeBlob(await it.getType(tipo)); return; }
+      if (it.types.includes("text/plain")) {
+        const txt = (await (await it.getType("text/plain")).text()).trim();
+        if (/^https:\/\//i.test(txt)) return criarRefDeLink(txt);
+      }
+    }
+    toast("Não achei imagem na área de transferência", { icon: "ti-clipboard-off", ms: 4000 });
+  } catch (e) {
+    toast("Copie a imagem e aperte Ctrl+V na tela de Referências", { icon: "ti-clipboard", ms: 5000 });
+  }
+}
+
+// Pontua o quanto uma referência combina com a cena (técnica > luz > clima).
+function pontuarRef(ref, cena) {
+  const a = ref.analise || {};
+  if (!a.plano && !a.mood) return 0;
+  let p = 0;
+  const tecIds = (a.tecnicas || []).map((t) => { const x = tecnicaFlex(t); return x ? x.id : null; }).filter(Boolean);
+  if (cena.tecnicaId && tecIds.includes(cena.tecnicaId)) p += 6;
+  const txt = JSON.stringify(a).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (cena.luz) {
+    const rot = luzLabel(cena.luz).toLowerCase();
+    if (rot.includes("contraluz") && txt.includes("contraluz")) p += 4;
+    const lz = a.luz || {};
+    if (cena.luz.cor && String(lz.temperatura || "").toLowerCase().includes(cena.luz.cor)) p += 2;
+    if (String(lz.qualidade || "").toLowerCase().includes(cena.luz.suave ? "suave" : "dura")) p += 2;
+  }
+  const emo = emocao(cena.emocao);
+  if (emo && txt.includes(emo.nome.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""))) p += 3;
+  // sobreposição de palavras com a descrição da cena
+  const pal = (cena.descricao || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .split(/\W+/).filter((w) => w.length > 4);
+  p += [...new Set(pal)].filter((w) => txt.includes(w)).length;
+  return p;
+}
+function refsParaCena(cena, max = 6) {
+  return store.getRefs()
+    .map((r) => ({ r, p: pontuarRef(r, cena) }))
+    .filter((x) => x.p > 0)
+    .sort((a, b) => b.p - a.p)
+    .slice(0, max)
+    .map((x) => x.r);
+}
+
 // A IA às vezes devolve o NOME ("Contraluz") em vez do id ("contraluz").
 // Casa por id OU nome, ignorando acento e caixa.
 function tecnicaFlex(v) {
@@ -1020,6 +1128,136 @@ async function analisarRef(id) {
     toast(String((e && e.message) || e) + (local ? " (IA só no site publicado)" : ""), { icon: "ti-alert-circle", ms: 4200 });
   }
   render();
+}
+
+/* --- Descobrir: busca em fontes de licença livre + atalhos --- */
+function viewDescobrir() {
+  const q = sessionStorage.getItem("descQ") || "";
+  const itens = JSON.parse(sessionStorage.getItem("descItens") || "[]");
+  const buscando = sessionStorage.getItem("descBuscando") === "1";
+
+  const grid = itens.map((it, i) => `
+    <button class="ref-card" data-act="importar-desc" data-i="${i}">
+      <div class="ref-thumb"><img src="${esc(it.thumb)}" alt="" loading="lazy"></div>
+      <div class="ref-meta">
+        <div class="ref-nome">${esc(it.titulo || "sem título")}</div>
+        <div class="ref-sub">${esc([it.autor, it.licenca].filter(Boolean).join(" · "))}</div>
+      </div>
+    </button>`).join("");
+
+  const termo = encodeURIComponent(q || "cinematic");
+  app.innerHTML =
+    topbar("Descobrir", { back: "go-refs" }) +
+    `<div class="content">
+       <div class="search-wrap">
+         <i class="ti ti-search"></i>
+         <input id="desc-q" type="search" value="${esc(q)}" placeholder="Ex: contraluz, neon noturno, retrato dramático" autocomplete="off">
+       </div>
+       <button class="btn btn-primary" data-act="desc-buscar"><i class="ti ti-search"></i> Buscar em fontes livres</button>
+       <p class="hint mt-2">Busca no <strong>Openverse</strong> (Flickr, museus e acervos com licença aberta). Toque numa imagem pra trazer pra sua biblioteca e analisar.</p>
+
+       ${buscando ? `<p class="ia-msg info mt-3"><i class="ti ti-loader-2 spin"></i> Buscando…</p>` : ""}
+       ${itens.length ? `<div class="spacer-sm"></div><div class="ref-grid">${grid}</div>` : ""}
+
+       <div class="spacer"></div>
+       <p class="section-title">Bancos de cinema (abrem fora do app)</p>
+       <p class="hint mb-2">Frames de filme são protegidos — não dá pra buscar aqui dentro. Estes sites fazem isso melhor; salve a imagem e traga pro app.</p>
+       <a class="btn btn-outline" href="https://shotdeck.com/browse/stills#q=${termo}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Buscar no ShotDeck</a>
+       <a class="btn btn-outline mt-2" href="https://app.flim.ai/search?query=${termo}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Buscar no Flim.ai</a>
+       <a class="btn btn-outline mt-2" href="https://www.cosmos.so/search?q=${termo}" target="_blank" rel="noopener"><i class="ti ti-external-link"></i> Buscar no Cosmos</a>
+       <p class="hint mt-2">Dica: copie a imagem (botão direito → copiar) e use <strong>Colar imagem</strong> na aba Referências — ou cole o link da página.</p>
+     </div>` +
+    bottomNav("refs");
+
+  const inp = document.getElementById("desc-q");
+  if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") buscarDescobrir(); });
+}
+
+async function buscarDescobrir() {
+  const inp = document.getElementById("desc-q");
+  const q = (inp ? inp.value : "").trim();
+  if (!q) { toast("Escreva o que você procura", { icon: "ti-alert-circle" }); return; }
+  sessionStorage.setItem("descQ", q);
+  sessionStorage.setItem("descBuscando", "1");
+  render();
+  try {
+    const resp = await fetch("/api/buscar-imagens.js", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.erro || ("Erro " + resp.status));
+    sessionStorage.setItem("descItens", JSON.stringify(data.itens || []));
+    if (!(data.itens || []).length) toast("Nada encontrado pra esse termo", { icon: "ti-mood-empty" });
+  } catch (e) {
+    const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    toast(String((e && e.message) || e) + (local ? " (só no site publicado)" : ""), { icon: "ti-alert-circle", ms: 4500 });
+  }
+  sessionStorage.setItem("descBuscando", "0");
+  render();
+}
+
+/* --- Lado a lado: referência + texto da cena ao mesmo tempo --- */
+function viewLado(rid, cid, iStr) {
+  const r = getRoteiro(rid);
+  if (!r) { go("#/"); return; }
+  const c = r.cenas.find((x) => x.id === cid);
+  if (!c) { go("#/roteiro/" + rid); return; }
+
+  const refs = refsParaCena(c, 12);
+  const todas = refs.length ? refs : store.getRefs().slice(0, 12);
+  let i = parseInt(iStr, 10); if (isNaN(i)) i = 0;
+  i = Math.max(0, Math.min(Math.max(0, todas.length - 1), i));
+  const ref = todas[i];
+  const a = (ref && ref.analise) || {};
+  const idx = r.cenas.findIndex((x) => x.id === cid);
+
+  const semRefs = `<div class="lado-vazio">
+      <i class="ti ti-photo-star"></i>
+      <p>Nenhuma referência ainda. Adicione na aba <strong>Refs</strong> e elas aparecem aqui conforme combinam com a cena.</p>
+      <button class="btn btn-primary" data-act="go-refs"><i class="ti ti-plus"></i> Ir pras Referências</button>
+    </div>`;
+
+  const painelRef = ref ? `
+    <div class="lado-img"><img data-img="${esc(ref.imagemId)}" alt=""></div>
+    <div class="lado-info">
+      <div class="lado-nome">${esc(a.titulo || "Referência")}</div>
+      <div class="lado-tags">
+        ${[a.plano, a.angulo, a.lente, (a.luz || {}).resumo].filter(Boolean)
+          .map((t) => `<span class="foco-chip">${esc(t)}</span>`).join("")}
+      </div>
+      ${(ref.paleta || []).length ? `<div class="ref-paleta mt-2">${ref.paleta.map((cc) => `<span class="sw" style="background:${esc(cc)}"></span>`).join("")}</div>` : ""}
+      <div class="lado-nav">
+        <button class="btn btn-outline" data-act="lado-ir" data-rid="${rid}" data-cid="${cid}" data-i="${i - 1}" ${i === 0 ? "disabled" : ""}><i class="ti ti-chevron-left"></i></button>
+        <span class="lado-cont">${i + 1} / ${todas.length}</span>
+        <button class="btn btn-outline" data-act="lado-ir" data-rid="${rid}" data-cid="${cid}" data-i="${i + 1}" ${i >= todas.length - 1 ? "disabled" : ""}><i class="ti ti-chevron-right"></i></button>
+        <button class="btn btn-outline" data-act="abrir-ref" data-id="${ref.id}"><i class="ti ti-info-circle"></i> Ficha</button>
+      </div>
+    </div>` : semRefs;
+
+  app.innerHTML = `
+    <div class="lado">
+      <div class="lado-top">
+        <button class="icon-btn" data-act="go-cena" data-rid="${rid}" data-cid="${cid}" aria-label="Voltar"><i class="ti ti-x"></i></button>
+        <span class="lado-titulo">Cena ${idx + 1} · lado a lado</span>
+      </div>
+      <div class="lado-grade">
+        <div class="lado-painel">${painelRef}</div>
+        <div class="lado-painel lado-texto">
+          <span class="label">O que acontece nessa cena</span>
+          <textarea id="lado-desc" rows="6" placeholder="Escreva olhando pra referência…">${esc(c.descricao || "")}</textarea>
+          ${a.composicao ? `<p class="hint mt-2"><strong>Composição da ref:</strong> ${esc(a.composicao)}</p>` : ""}
+          ${Array.isArray(a.reproduzir) && a.reproduzir.length ? `
+            <p class="section-title mt-3">Como reproduzir</p>
+            <ol class="steps">${a.reproduzir.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : ""}
+          ${ref ? `<button class="btn btn-primary mt-2" data-act="usar-ref-cena" data-rid="${rid}" data-cid="${cid}" data-id="${ref.id}"><i class="ti ti-check"></i> Usar esta referência na cena</button>` : ""}
+        </div>
+      </div>
+    </div>`;
+
+  hydrateImgs();
+  const t = document.getElementById("lado-desc");
+  if (t) t.addEventListener("input", () => updateCena(rid, cid, { descricao: t.value }));
 }
 
 /* ---------------- Telas ---------------- */
@@ -1278,6 +1516,22 @@ function viewCena(rid, cid) {
   const detVal = [c.local, c.horario, c.equipamento].filter(Boolean).map(esc).join(" · ")
     || "Local, horário e equipamento";
 
+  // Referências que combinam com esta cena
+  const refsCena = refsParaCena(c, 8);
+  const refsVal = refsCena.length ? plural(refsCena.length, "sugestão", "sugestões") : "";
+  const refsBody = refsCena.length ? `
+      <div class="ref-strip">
+        ${refsCena.map((rf) => {
+          const ra = rf.analise || {};
+          return `<button class="ref-mini ${c.refId === rf.id ? "usada" : ""}" data-act="abrir-ref" data-id="${rf.id}">
+            <img data-img="${esc(rf.imagemId)}" alt="">
+            <span>${esc(ra.plano || ra.titulo || "ref")}</span>
+          </button>`;
+        }).join("")}
+      </div>
+      <button class="btn btn-primary mt-2" data-act="abrir-lado" data-rid="${rid}" data-cid="${cid}"><i class="ti ti-layout-columns"></i> Abrir lado a lado</button>
+      <p class="hint mt-2">Escreva a cena olhando pra referência — e siga os passos de "como reproduzir".</p>` : "";
+
   // Modo Livre (compor cena)
   const cd = compData(c);
   const selEl = cd.elements.find((e) => e.id === compSel);
@@ -1341,6 +1595,7 @@ function viewCena(rid, cid) {
          <textarea id="cena-desc" rows="4" placeholder="${esc(c.dica || "Descreva o que você vai filmar…")}">${esc(c.descricao)}</textarea>
        </div>
 
+       ${refsBody ? accHtml("cena:" + cid + ":refs", "ti-photo-star", "Referências que combinam", refsVal, true, refsBody, true) : ""}
        ${accHtml("cena:" + cid + ":comp", "ti-stack-2", "Compor cena (livre)", compVal, compTemAlgo(c), compBody, true)}
        ${accHtml("cena:" + cid + ":ref", "ti-camera", "Referência visual", refVal, !!(tec || c.imagemId), refBody, false)}
        ${accHtml("cena:" + cid + ":int", "ti-mood-smile", "Intenção da cena", intVal, !!(emoAtual || fAtual), intencaoBody, false)}
@@ -1985,6 +2240,8 @@ function render() {
   if (a === "acervo") return viewAcervo();
   if (a === "refs") return viewRefs();
   if (a === "ref") return viewRef(b);
+  if (a === "descobrir") return viewDescobrir();
+  if (a === "lado") return viewLado(b, c, parts[3]);
   if (a === "tecnica") return viewTecnica(b);
   if (a === "guia") return viewGuia();
   if (a === "gravacao") return viewGravacao(b);
@@ -2018,16 +2275,56 @@ document.addEventListener("click", async (e) => {
   if (act === "abrir-ref") return go("#/ref/" + d.id);
   if (act === "ref-filtrar") { sessionStorage.setItem("refFiltro", d.f || ""); return render(); }
   if (act === "add-ref") {
-    return pickImage(async (imgId) => {
-      const blob = await idbGet(imgId);
-      const paleta = blob ? await paletaDoBlob(blob) : [];
-      const nova = { id: uid("ref"), imagemId: imgId, paleta, analise: {}, criadoEm: Date.now() };
-      const all = store.getRefs();
-      all.push(nova);
-      store.saveRefs(all);
-      go("#/ref/" + nova.id);
-      analisarRef(nova.id); // analisa em seguida, já na tela de detalhe
+    const escolha = await actionSheet({
+      title: "Adicionar referência",
+      actions: [
+        { id: "arquivo", label: "Escolher imagem do aparelho", icon: "ti-photo-up" },
+        { id: "colar", label: "Colar imagem copiada", icon: "ti-clipboard" },
+        { id: "link", label: "Colar link (imagem ou página)", icon: "ti-link" },
+        { id: "descobrir", label: "Descobrir online", icon: "ti-world-search" }
+      ]
     });
+    if (escolha === "arquivo") {
+      return pickImage(async (imgId) => {
+        const blob = await idbGet(imgId);
+        const paleta = blob ? await paletaDoBlob(blob) : [];
+        const nova = { id: uid("ref"), imagemId: imgId, paleta, analise: {}, criadoEm: Date.now() };
+        const all = store.getRefs(); all.push(nova); store.saveRefs(all);
+        go("#/ref/" + nova.id);
+        analisarRef(nova.id);
+      });
+    }
+    if (escolha === "colar") return colarImagemDaArea();
+    if (escolha === "descobrir") return go("#/descobrir");
+    if (escolha === "link") {
+      const url = await promptDialog({
+        title: "Colar link",
+        label: "Link da imagem ou da página (pin do Pinterest, item do Cosmos…)",
+        placeholder: "https://…", confirm: "Trazer"
+      });
+      if (url) return criarRefDeLink(url.trim());
+      return;
+    }
+    return;
+  }
+  if (act === "desc-buscar") return buscarDescobrir();
+  if (act === "importar-desc") {
+    const itens = JSON.parse(sessionStorage.getItem("descItens") || "[]");
+    const it = itens[parseInt(d.i, 10)];
+    if (it) return criarRefDeLink(it.full || it.thumb);
+    return;
+  }
+  if (act === "go-cena") return go("#/cena/" + d.rid + "/" + d.cid);
+  if (act === "abrir-lado") return go("#/lado/" + d.rid + "/" + d.cid);
+  if (act === "lado-ir") return go("#/lado/" + d.rid + "/" + d.cid + "/" + d.i);
+  if (act === "usar-ref-cena") {
+    const ref = refPorId(d.id);
+    const tecs = ((ref && ref.analise && ref.analise.tecnicas) || []).map(tecnicaFlex).filter(Boolean);
+    const patch = { refId: d.id };
+    if (tecs.length) patch.tecnicaId = tecs[0].id;
+    updateCena(d.rid, d.cid, patch);
+    toast("Referência ligada à cena", { icon: "ti-link" });
+    return render();
   }
   if (act === "reanalisar-ref") return analisarRef(d.id);
   if (act === "del-ref") {
