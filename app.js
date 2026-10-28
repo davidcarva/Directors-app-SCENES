@@ -860,6 +860,18 @@ function blobParaDataURL(blob) {
 
 function refPorId(id) { return store.getRefs().find((r) => r.id === id); }
 
+// A IA às vezes devolve o NOME ("Contraluz") em vez do id ("contraluz").
+// Casa por id OU nome, ignorando acento e caixa.
+function tecnicaFlex(v) {
+  const n = String(v == null ? "" : v).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  if (!n || n === "null") return null;
+  return (window.TECNICAS || []).find((t) => {
+    const id = t.id.toLowerCase();
+    const nome = t.nome.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return id === n || nome === n;
+  }) || null;
+}
+
 /* --- Biblioteca (grid) --- */
 function viewRefs() {
   const refs = store.getRefs().sort((a, b) => b.criadoEm - a.criadoEm);
@@ -917,7 +929,7 @@ function viewRef(id) {
 
   const luz = a.luz || {};
   const luzTxt = luz.resumo || [luz.direcao, luz.qualidade, luz.temperatura].filter(Boolean).join(" · ");
-  const tecs = (a.tecnicas || []).map((tid) => tecnica(tid)).filter(Boolean);
+  const tecs = (a.tecnicas || []).map((tid) => tecnicaFlex(tid)).filter(Boolean);
   const passos = Array.isArray(a.reproduzir) ? a.reproduzir : [];
   const paleta = (r.paleta || []).map((c) => `<span class="sw lg" style="background:${esc(c)}" title="${esc(c)}"></span>`).join("");
   const temFicha = a.plano || a.angulo || a.lente;
