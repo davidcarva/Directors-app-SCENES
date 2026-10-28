@@ -1,0 +1,12 @@
+{
+  "appId": "app.diretor.cenas",
+  "appName": "Diretor",
+  "webDir": "www",
+  "server": {
+    "url": "https://directors-app-scenes.vercel.app",
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#171717"
+  }
+}

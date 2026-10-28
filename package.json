@@ -1,0 +1,28 @@
+{
+  "name": "diretor",
+  "version": "1.0.0",
+  "description": "Diretor - roteiros e referencias visuais",
+  "scripts": {
+    "apk": "echo Veja APK.md - o build roda em C:/Users/david/diretor-build (caminho sem acento)"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidcarva/Directors-app-SCENES.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/davidcarva/Directors-app-SCENES/issues"
+  },
+  "homepage": "https://github.com/davidcarva/Directors-app-SCENES#readme",
+  "private": true,
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0"
+  }
+}
